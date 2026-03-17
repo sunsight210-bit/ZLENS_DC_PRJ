@@ -35,3 +35,20 @@
 - 类成员顺序: `public` → `protected` → `private`
 - 定点数单位后缀: `iZoom_x10`, `iTemp_x100`
 - 头文件保护: `#pragma once`
+
+## 开发流程（必须遵循）
+
+### 质量门控规则
+
+每个阶段的代码必须按以下顺序通过验证，任一步骤未通过则不允许进入下一步：
+
+```
+编写代码 → Mock 单元测试通过 → 编译固件 → 板上测试通过 → git commit → git push
+```
+
+### 阶段管理
+
+- 进度看板：`docs/progress.md`（每次会话开始先读取此文件确认当前阶段）
+- 每阶段文档：`docs/phases/phaseN-xxx/`（plan.md、verify.md、review.md）
+- **门控检查**：commit 前必须确认对应阶段的 `verify.md` 中 Mock 测试、固件编译、板上测试三项均有通过记录
+- **阶段推进**：只有当前阶段的 `verify.md` 全部通过 + `review.md` 已填写，才可开始下一阶段的 `plan.md`

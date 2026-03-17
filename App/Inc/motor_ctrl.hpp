@@ -16,7 +16,7 @@ enum class DIRECTION_E { FORWARD, REVERSE };
 
 class MotorCtrl {
 public:
-    static constexpr uint16_t PWM_ARR = 4799;
+    static constexpr uint16_t PWM_ARR = 4266;
     static constexpr uint16_t MAX_SPEED = 3600;    // ~75% duty
     static constexpr uint16_t MIN_SPEED = 480;     // ~10% duty
     static constexpr uint16_t ACCEL_STEP = 10;     // PWM increment per ms

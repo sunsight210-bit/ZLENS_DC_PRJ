@@ -44,6 +44,10 @@ typedef struct { USART_TypeDef *Instance; } UART_HandleTypeDef;
 typedef struct { volatile uint32_t DHR12R2; } DAC_TypeDef;
 typedef struct { DAC_TypeDef *Instance; } DAC_HandleTypeDef;
 
+// --- IWDG ---
+typedef struct { volatile uint32_t dummy; } IWDG_TypeDef;
+typedef struct { IWDG_TypeDef *Instance; } IWDG_HandleTypeDef;
+
 // --- FLASH ---
 typedef enum { FLASH_TYPEERASE_PAGES = 0 } FLASH_TypeEraseTypeDef;
 typedef struct {
@@ -60,6 +64,7 @@ extern GPIO_TypeDef mock_GPIOB_instance;
 extern GPIO_TypeDef mock_GPIOA_instance;
 extern ADC_TypeDef mock_ADC1_instance;
 extern DAC_TypeDef mock_DAC_instance;
+extern IWDG_TypeDef mock_IWDG_instance;
 
 #define TIM3  (&mock_TIM3_instance)
 #define TIM8  (&mock_TIM8_instance)
@@ -68,3 +73,4 @@ extern DAC_TypeDef mock_DAC_instance;
 #define GPIOA (&mock_GPIOA_instance)
 #define ADC1  (&mock_ADC1_instance)
 #define DAC1  (&mock_DAC_instance)
+#define IWDG  (&mock_IWDG_instance)

@@ -34,6 +34,13 @@ struct HalCallLog {
     uint32_t flash_base = 0x0803F800;
     bool flash_unlocked = false;
 
+    // IWDG
+    uint32_t iwdg_refresh_count = 0;
+
+    // Controllable tick
+    uint32_t tick = 0;
+    bool tick_auto_increment = true;
+
     void reset();
 };
 
@@ -70,6 +77,8 @@ HAL_StatusTypeDef HAL_FLASHEx_Erase(FLASH_EraseInitTypeDef* pEraseInit, uint32_t
 HAL_StatusTypeDef HAL_FLASH_Program(uint32_t TypeProgram, uint32_t Address, uint64_t Data);
 
 uint32_t HAL_GetTick(void);
+
+HAL_StatusTypeDef HAL_IWDG_Refresh(IWDG_HandleTypeDef* hiwdg);
 
 #ifdef __cplusplus
 }

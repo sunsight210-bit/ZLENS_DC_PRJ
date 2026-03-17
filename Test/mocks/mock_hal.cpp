@@ -10,8 +10,7 @@ GPIO_TypeDef mock_GPIOB_instance = {};
 GPIO_TypeDef mock_GPIOA_instance = {};
 ADC_TypeDef mock_ADC1_instance = {};
 DAC_TypeDef mock_DAC_instance = {};
-
-static uint32_t s_tick = 0;
+IWDG_TypeDef mock_IWDG_instance = {};
 
 namespace mock {
 
@@ -27,7 +26,9 @@ void HalCallLog::reset() {
     uart_tx_data.clear();
     flash_memory.assign(2048, 0xFF);
     flash_unlocked = false;
-    s_tick = 0;
+    iwdg_refresh_count = 0;
+    tick = 0;
+    tick_auto_increment = true;
     mock_TIM3_instance = {};
     mock_TIM8_instance = {};
     mock_SPI2_instance = {};
@@ -44,6 +45,7 @@ void HAL_GPIO_WritePin(GPIO_TypeDef* port, uint16_t pin, uint8_t state) {
 }
 
 uint8_t HAL_GPIO_ReadPin(GPIO_TypeDef* port, uint16_t pin) {
+    (void)port; (void)pin;
     return GPIO_PIN_RESET;
 }
 
@@ -96,6 +98,7 @@ HAL_StatusTypeDef HAL_FLASH_Lock(void) {
 }
 
 HAL_StatusTypeDef HAL_FLASHEx_Erase(FLASH_EraseInitTypeDef* pEraseInit, uint32_t* PageError) {
+    (void)pEraseInit;
     auto& log = mock::get_log();
     if (!log.flash_unlocked) return HAL_ERROR;
     std::fill(log.flash_memory.begin(), log.flash_memory.end(), 0xFF);
@@ -114,6 +117,17 @@ HAL_StatusTypeDef HAL_FLASH_Program(uint32_t, uint32_t Address, uint64_t Data) {
     return HAL_OK;
 }
 
-uint32_t HAL_GetTick(void) { return s_tick++; }
+uint32_t HAL_GetTick(void) {
+    auto& log = mock::get_log();
+    if (log.tick_auto_increment) {
+        return log.tick++;
+    }
+    return log.tick;
+}
+
+HAL_StatusTypeDef HAL_IWDG_Refresh(IWDG_HandleTypeDef*) {
+    mock::get_log().iwdg_refresh_count++;
+    return HAL_OK;
+}
 
 } // extern "C"

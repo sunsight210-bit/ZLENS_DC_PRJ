@@ -20,6 +20,7 @@ function(zlens_add_test NAME SOURCE APP_SOURCES)
     target_include_directories(${NAME} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/mocks
         ${CMAKE_SOURCE_DIR}/App/Inc
+        ${CMAKE_SOURCE_DIR}/Tasks/Inc
     )
     target_compile_definitions(${NAME} PRIVATE BUILD_TESTING)
     add_test(NAME ${NAME} COMMAND ${NAME})
@@ -98,3 +99,42 @@ target_link_libraries(test_system_manager PRIVATE zlens_mocks GTest::gtest_main)
 target_include_directories(test_system_manager PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/mocks ${CMAKE_SOURCE_DIR}/App/Inc)
 add_test(NAME test_system_manager COMMAND test_system_manager)
+
+# ==========================================
+# Task-level tests (Phase 3-6)
+# ==========================================
+
+# --- MotorTask ---
+zlens_add_test(test_motor_task test_motor_task.cpp
+    ${CMAKE_SOURCE_DIR}/Tasks/Src/motor_task.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/motor_ctrl.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/encoder.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/stall_detect.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/zoom_table.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/crc16.cpp
+)
+
+# --- CommTask ---
+zlens_add_test(test_comm_task test_comm_task.cpp
+    ${CMAKE_SOURCE_DIR}/Tasks/Src/comm_task.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/comm_protocol.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/system_manager.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/zoom_table.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/crc16.cpp
+)
+
+# --- StorageTask ---
+zlens_add_test(test_storage_task test_storage_task.cpp
+    ${CMAKE_SOURCE_DIR}/Tasks/Src/storage_task.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/fram_storage.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/crc16.cpp
+)
+
+# --- MonitorTask ---
+zlens_add_test(test_monitor_task test_monitor_task.cpp
+    ${CMAKE_SOURCE_DIR}/Tasks/Src/monitor_task.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/system_manager.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/power_monitor.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/fram_storage.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/crc16.cpp
+)
