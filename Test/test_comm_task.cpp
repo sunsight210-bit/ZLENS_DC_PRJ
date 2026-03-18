@@ -3,6 +3,8 @@
 #include "comm_task.hpp"
 #include "crc16.hpp"
 
+namespace zlens { volatile bool g_bUartSelfTestReq = false; }
+
 using namespace zlens;
 
 class CommTaskTest : public ::testing::Test {
@@ -188,6 +190,26 @@ TEST_F(CommTaskTest, FactorySetAngle_Forwards) {
     EXPECT_TRUE(receive_cmd(msg));
     EXPECT_EQ(msg.cmd, fcmd::SET_ANGLE);
     EXPECT_EQ(msg.param, 0x510E); // param_low = angle_x100
+}
+
+TEST_F(CommTaskTest, SelfTest_SetsFlag_SendsAck) {
+    g_bUartSelfTestReq = false;
+    send_work_frame(cmd::SELF_TEST, 0);
+
+    // Flag should be set
+    EXPECT_TRUE(g_bUartSelfTestReq);
+
+    // Should NOT be forwarded to cmdQueue
+    CMD_MESSAGE_S msg;
+    EXPECT_FALSE(receive_cmd(msg));
+
+    // Should send ACK response
+    ASSERT_GE(uart_tx_count(), 1u);
+    auto& tx = mock::get_log().uart_tx_data.back();
+    auto result = comm.parse_work_frame(tx.data(), tx.size());
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.cmd, cmd::SELF_TEST);
+    EXPECT_EQ(result.param, rsp::OK);
 }
 
 TEST_F(CommTaskTest, CheckRspQueue_SendsUart) {

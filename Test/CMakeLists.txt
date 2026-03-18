@@ -122,6 +122,7 @@ zlens_add_test(test_motor_task test_motor_task.cpp
     ${CMAKE_SOURCE_DIR}/App/Src/crc16.cpp
     ${CMAKE_SOURCE_DIR}/App/Src/adc_filter.cpp
     ${CMAKE_SOURCE_DIR}/App/Src/fram_storage.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/system_manager.cpp
 )
 
 # --- CommTask ---

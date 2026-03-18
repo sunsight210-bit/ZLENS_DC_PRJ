@@ -65,6 +65,13 @@ void CommTask::dispatch_work_command(uint8_t cmd_byte, uint16_t param) {
         return;
     }
 
+    // Self-test: set flag + ACK
+    if (cmd_byte == cmd::SELF_TEST) {
+        g_bUartSelfTestReq = true;
+        send_uart_frame(cmd::SELF_TEST, rsp::OK);
+        return;
+    }
+
     // Motion commands: reject if busy
     if (is_motion_command(cmd_byte) && m_pSm->is_busy()) {
         send_uart_frame(cmd_byte, rsp::BUSY);
@@ -125,6 +132,8 @@ bool CommTask::is_motion_command(uint8_t cmd_byte) const {
 } // namespace zlens
 
 #ifndef BUILD_TESTING
+#include "swo_debug.hpp"
+
 // UART DMA receive buffer (file-scope, used by ISR callback)
 static uint8_t s_aRxBuf[16];
 static volatile uint16_t s_iRxLen = 0;
@@ -135,6 +144,12 @@ extern "C" void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef* huart, uint16_t S
         s_iRxLen = Size;
         s_bRxReady = true;
     }
+}
+
+static void start_uart_dma_rx(UART_HandleTypeDef* huart) {
+    HAL_UARTEx_ReceiveToIdle_DMA(huart, s_aRxBuf, sizeof(s_aRxBuf));
+    // Disable DMA half-transfer interrupt (common ReceiveToIdle_DMA pitfall)
+    __HAL_DMA_DISABLE_IT(huart->hdmarx, DMA_IT_HT);
 }
 #endif
 
@@ -150,14 +165,20 @@ extern "C" void comm_task_entry(void* params) {
               g_cmdQueue, g_rspQueue, &huart2);
 
     // Start UART DMA receive (IDLE line detection)
-    HAL_UARTEx_ReceiveToIdle_DMA(&huart2, s_aRxBuf, sizeof(s_aRxBuf));
+    start_uart_dma_rx(&huart2);
+    swo_printf("[COMM] Task started, UART DMA RX armed\n");
 
     TickType_t xLastWake = xTaskGetTickCount();
     for (;;) {
         if (s_bRxReady) {
             s_bRxReady = false;
+            swo_printf("[COMM] RX %u bytes:", s_iRxLen);
+            for (uint16_t i = 0; i < s_iRxLen && i < 8; i++) {
+                swo_printf(" %02X", s_aRxBuf[i]);
+            }
+            swo_printf("\n");
             task.on_frame_received(s_aRxBuf, s_iRxLen);
-            HAL_UARTEx_ReceiveToIdle_DMA(&huart2, s_aRxBuf, sizeof(s_aRxBuf));
+            start_uart_dma_rx(&huart2);
         }
         task.run_once();
         vTaskDelayUntil(&xLastWake, pdMS_TO_TICKS(10));

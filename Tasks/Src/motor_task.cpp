@@ -8,13 +8,15 @@
 namespace zlens {
 
 void MotorTask::init(MotorCtrl* pMotor, Encoder* pEncoder, StallDetect* pStall,
-                     ZoomTable* pZoom, FramStorage* pFram, QueueHandle_t cmdQ,
-                     QueueHandle_t rspQ, QueueHandle_t saveQ, uint16_t* pAdcCurrent) {
+                     ZoomTable* pZoom, FramStorage* pFram, SystemManager* pSm,
+                     QueueHandle_t cmdQ, QueueHandle_t rspQ, QueueHandle_t saveQ,
+                     uint16_t* pAdcCurrent) {
     m_pMotor = pMotor;
     m_pEncoder = pEncoder;
     m_pStall = pStall;
     m_pZoom = pZoom;
     m_pFram = pFram;
+    m_pSm = pSm;
     m_cmdQueue = cmdQ;
     m_rspQueue = rspQ;
     m_saveQueue = saveQ;
@@ -85,6 +87,7 @@ void MotorTask::dispatch_command(const CMD_MESSAGE_S& stCmd) {
     switch (stCmd.cmd) {
     case cmd::SET_ZOOM: {
         if (m_eTaskState != TASK_STATE_E::IDLE) break;
+        m_pSm->transition_to(SYSTEM_STATE_E::BUSY);
         int32_t iTarget = m_pZoom->get_position(stCmd.param);
         iTarget = clamp_to_soft_limits(iTarget);
         m_pStall->set_direction(iTarget > m_pEncoder->get_position()
@@ -96,6 +99,7 @@ void MotorTask::dispatch_command(const CMD_MESSAGE_S& stCmd) {
     }
     case cmd::HOMING:
         if (m_eTaskState != TASK_STATE_E::IDLE) break;
+        m_pSm->transition_to(SYSTEM_STATE_E::HOMING);
         start_homing();
         break;
     case cmd::FORCE_STOP:
@@ -105,10 +109,12 @@ void MotorTask::dispatch_command(const CMD_MESSAGE_S& stCmd) {
             m_bCycleWaiting = false;
         }
         m_eTaskState = TASK_STATE_E::IDLE;
+        m_pSm->transition_to(SYSTEM_STATE_E::READY);
         send_response(cmd::FORCE_STOP, rsp::OK);
         break;
     case cmd::CYCLE_START:
         if (m_eTaskState != TASK_STATE_E::IDLE) break;
+        m_pSm->transition_to(SYSTEM_STATE_E::BUSY);
         start_cycle(static_cast<int8_t>(stCmd.param >> 8),
                     static_cast<uint8_t>(stCmd.param & 0xFF));
         break;
@@ -139,6 +145,7 @@ void MotorTask::process_moving() {
         send_response(cmd::SET_ZOOM, iZoom);
         send_save(save_reason::ARRIVED);
         m_eTaskState = TASK_STATE_E::IDLE;
+        m_pSm->transition_to(SYSTEM_STATE_E::READY);
     }
 }
 
@@ -163,6 +170,7 @@ void MotorTask::process_homing() {
             send_response(cmd::HOMING, rsp::OK);
             send_save(save_reason::ARRIVED);
             m_eTaskState = TASK_STATE_E::IDLE;
+            m_pSm->transition_to(SYSTEM_STATE_E::READY);
 #ifndef BUILD_TESTING
             swo_printf("[PASS] Homing complete: range=%ld, pos=%ld\n",
                        static_cast<long>(m_iTotalRange),
@@ -206,6 +214,7 @@ void MotorTask::handle_stall() {
         m_pMotor->emergency_stop();
         m_pStall->reset();
         m_eTaskState = TASK_STATE_E::IDLE;
+        m_pSm->transition_to(SYSTEM_STATE_E::READY);
         send_response(cmd::FORCE_STOP, rsp::STALL_ALARM);
         send_save(save_reason::STALL);
 #ifndef BUILD_TESTING
@@ -221,6 +230,7 @@ void MotorTask::handle_power_down() {
     m_pFram->emergency_save(m_pEncoder->get_position());
     m_pStall->reset();
     m_eTaskState = TASK_STATE_E::IDLE;
+    m_pSm->transition_to(SYSTEM_STATE_E::READY);
     send_response(cmd::FORCE_STOP, rsp::POWER_DOWN);
 #ifndef BUILD_TESTING
     swo_printf("[WARN] Power down detected, emergency save position=%ld\n",
@@ -239,6 +249,7 @@ void MotorTask::handle_overcurrent() {
     m_pMotor->emergency_stop();
     m_pStall->reset();
     m_eTaskState = TASK_STATE_E::IDLE;
+    m_pSm->transition_to(SYSTEM_STATE_E::READY);
     send_response(cmd::FORCE_STOP, rsp::OVERCURRENT);
     send_save(save_reason::STALL);
 #ifndef BUILD_TESTING
@@ -281,6 +292,7 @@ void MotorTask::stop_cycle() {
         m_pMotor->emergency_stop();
         m_pStall->reset();
         m_eTaskState = TASK_STATE_E::IDLE;
+        m_pSm->transition_to(SYSTEM_STATE_E::READY);
         send_response(cmd::CYCLE_STOP, rsp::OK);
     }
 }
@@ -349,8 +361,8 @@ extern "C" void motor_task_entry(void* params) {
 
     static MotorTask task;
     task.init(&g_Motor, &g_Encoder, &g_StallDetect, &g_ZoomTable,
-              &g_FramStorage, g_cmdQueue, g_rspQueue, g_saveQueue,
-              const_cast<uint16_t*>(&g_aAdcDmaBuf[0]));
+              &g_FramStorage, &g_SystemManager, g_cmdQueue, g_rspQueue,
+              g_saveQueue, const_cast<uint16_t*>(&g_aAdcDmaBuf[0]));
 
     TickType_t xLastWake = xTaskGetTickCount();
     for (;;) {

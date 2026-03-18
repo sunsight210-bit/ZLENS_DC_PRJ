@@ -87,5 +87,6 @@ extern QueueHandle_t g_cmdQueue;
 extern QueueHandle_t g_rspQueue;
 extern QueueHandle_t g_saveQueue;
 extern volatile bool g_bSpiEmergency;
+extern volatile bool g_bUartSelfTestReq;
 
 } // namespace zlens

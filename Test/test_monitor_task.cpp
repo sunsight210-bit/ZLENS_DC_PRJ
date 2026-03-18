@@ -8,6 +8,7 @@ using namespace zlens;
 namespace zlens {
     QueueHandle_t g_cmdQueue = nullptr;
     QueueHandle_t g_rspQueue = nullptr;
+    volatile bool g_bUartSelfTestReq = false;
 }
 
 class MonitorTaskTest : public ::testing::Test {
@@ -152,6 +153,27 @@ TEST_F(MonitorTaskTest, NormalBoot_NoMoveWhenCloseToZoom) {
     if (bGotCmd) {
         EXPECT_NE(stCmd.cmd, cmd::SET_ZOOM);
     }
+}
+
+TEST_F(MonitorTaskTest, UartSelfTestReq_TriggersRetest) {
+    // First: get to READY state via normal boot
+    prepare_valid_fram();
+    encoder.set_position(50000);
+    zoom.set_total_range(346292);
+    sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
+    task.run_once(); // normal boot -> READY
+    EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::READY);
+
+    // Set UART self-test request flag
+    g_bUartSelfTestReq = true;
+    task.run_once();
+
+    // Flag should be cleared
+    EXPECT_FALSE(g_bUartSelfTestReq);
+    // Should transition to SELF_TEST
+    EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::SELF_TEST);
+    // Self-test state should be reset
+    EXPECT_FALSE(task.is_self_test_done());
 }
 
 TEST_F(MonitorTaskTest, ReadyState_FeedsWatchdog) {

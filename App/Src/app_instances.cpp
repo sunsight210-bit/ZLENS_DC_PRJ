@@ -25,6 +25,7 @@ QueueHandle_t g_cmdQueue = nullptr;
 QueueHandle_t g_rspQueue = nullptr;
 QueueHandle_t g_saveQueue = nullptr;
 volatile bool g_bSpiEmergency = false;
+volatile bool g_bUartSelfTestReq = false;
 
 // Global App module instances
 MotorCtrl g_Motor;

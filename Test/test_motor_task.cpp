@@ -14,6 +14,7 @@ protected:
     StallDetect stall;
     ZoomTable zoom;
     FramStorage fram;
+    SystemManager sm;
 
     TIM_HandleTypeDef htim3;
     DAC_HandleTypeDef hdac;
@@ -39,8 +40,12 @@ protected:
         rspQ = xQueueCreate(8, sizeof(RSP_MESSAGE_S));
         saveQ = xQueueCreate(8, sizeof(SAVE_MESSAGE_S));
 
+        sm.init();
+        sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
+        sm.transition_to(SYSTEM_STATE_E::READY);
+
         iAdcCurrent = 0;
-        task.init(&motor, &encoder, &stall, &zoom, &fram, cmdQ, rspQ, saveQ, &iAdcCurrent);
+        task.init(&motor, &encoder, &stall, &zoom, &fram, &sm, cmdQ, rspQ, saveQ, &iAdcCurrent);
     }
 
     void send_cmd(uint8_t cmd, uint16_t param = 0) {

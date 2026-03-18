@@ -7,6 +7,7 @@
 #include "adc_filter.hpp"
 #include "zoom_table.hpp"
 #include "fram_storage.hpp"
+#include "system_manager.hpp"
 
 namespace zlens {
 
@@ -20,8 +21,9 @@ public:
     };
 
     void init(MotorCtrl* pMotor, Encoder* pEncoder, StallDetect* pStall,
-              ZoomTable* pZoom, FramStorage* pFram, QueueHandle_t cmdQ,
-              QueueHandle_t rspQ, QueueHandle_t saveQ, uint16_t* pAdcCurrent);
+              ZoomTable* pZoom, FramStorage* pFram, SystemManager* pSm,
+              QueueHandle_t cmdQ, QueueHandle_t rspQ, QueueHandle_t saveQ,
+              uint16_t* pAdcCurrent);
 
     void run_once();
     void start_homing();
@@ -43,6 +45,7 @@ private:
     StallDetect* m_pStall = nullptr;
     ZoomTable* m_pZoom = nullptr;
     FramStorage* m_pFram = nullptr;
+    SystemManager* m_pSm = nullptr;
 
     QueueHandle_t m_cmdQueue = nullptr;
     QueueHandle_t m_rspQueue = nullptr;

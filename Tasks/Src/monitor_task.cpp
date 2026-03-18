@@ -109,10 +109,24 @@ void MonitorTask::run_once() {
         break;
 
     case SYSTEM_STATE_E::HOMING:
-    case SYSTEM_STATE_E::READY:
     case SYSTEM_STATE_E::BUSY:
         feed_watchdog();
         check_voltage();
+        break;
+
+    case SYSTEM_STATE_E::READY:
+        feed_watchdog();
+        check_voltage();
+        if (g_bUartSelfTestReq) {
+            g_bUartSelfTestReq = false;
+            // Reset self-test state for re-run
+            m_bSelfTestDone = false;
+            m_bSelfTestPassed = false;
+            m_bBootDecided = false;
+            m_bNormalBoot = false;
+            m_bNormalBootStarted = false;
+            m_pSm->transition_to(SYSTEM_STATE_E::SELF_TEST);
+        }
         break;
 
     case SYSTEM_STATE_E::ERROR_STATE:
