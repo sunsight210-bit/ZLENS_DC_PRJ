@@ -13,7 +13,7 @@ bool SystemManager::is_valid_transition(SYSTEM_STATE_E from, SYSTEM_STATE_E to) 
 
     switch (from) {
     case SYSTEM_STATE_E::INIT:       return to == SYSTEM_STATE_E::SELF_TEST;
-    case SYSTEM_STATE_E::SELF_TEST:  return to == SYSTEM_STATE_E::HOMING;
+    case SYSTEM_STATE_E::SELF_TEST:  return to == SYSTEM_STATE_E::HOMING || to == SYSTEM_STATE_E::READY;
     case SYSTEM_STATE_E::HOMING:     return to == SYSTEM_STATE_E::READY;
     case SYSTEM_STATE_E::READY:      return to == SYSTEM_STATE_E::BUSY || to == SYSTEM_STATE_E::HOMING;
     case SYSTEM_STATE_E::BUSY:       return to == SYSTEM_STATE_E::READY;

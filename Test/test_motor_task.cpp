@@ -4,6 +4,8 @@
 
 using namespace zlens;
 
+namespace zlens { volatile bool g_bSpiEmergency = false; }
+
 class MotorTaskTest : public ::testing::Test {
 protected:
     MotorTask task;
@@ -11,9 +13,11 @@ protected:
     Encoder encoder;
     StallDetect stall;
     ZoomTable zoom;
+    FramStorage fram;
 
     TIM_HandleTypeDef htim3;
     DAC_HandleTypeDef hdac;
+    SPI_HandleTypeDef hspi;
     QueueHandle_t cmdQ, rspQ, saveQ;
     uint16_t iAdcCurrent = 0;
 
@@ -22,19 +26,21 @@ protected:
         mock::get_log().tick_auto_increment = true;
         htim3.Instance = TIM3;
         hdac.Instance = DAC1;
+        hspi.Instance = SPI2;
 
         encoder.init();
         motor.init(&htim3, &hdac, &encoder);
         stall.init();
         zoom.init();
         zoom.load_defaults();
+        fram.init(&hspi);
 
         cmdQ = xQueueCreate(8, sizeof(CMD_MESSAGE_S));
         rspQ = xQueueCreate(8, sizeof(RSP_MESSAGE_S));
         saveQ = xQueueCreate(8, sizeof(SAVE_MESSAGE_S));
 
         iAdcCurrent = 0;
-        task.init(&motor, &encoder, &stall, &zoom, cmdQ, rspQ, saveQ, &iAdcCurrent);
+        task.init(&motor, &encoder, &stall, &zoom, &fram, cmdQ, rspQ, saveQ, &iAdcCurrent);
     }
 
     void send_cmd(uint8_t cmd, uint16_t param = 0) {
@@ -287,4 +293,45 @@ TEST_F(MotorTaskTest, ForceStop_StopsMotor) {
     RSP_MESSAGE_S rsp;
     EXPECT_TRUE(receive_rsp(rsp));
     EXPECT_EQ(rsp.cmd, cmd::FORCE_STOP);
+}
+
+TEST_F(MotorTaskTest, PowerDown_EmergencyStop) {
+    zoom.set_total_range(100000);
+    send_cmd(cmd::SET_ZOOM, 60);
+    task.run_once();
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::MOVING);
+
+    // Simulate power-down notification
+    mock_rtos::set_notify_return(pdTRUE, 0x02);
+    task.run_once();
+
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::IDLE);
+    mock_rtos::set_notify_return(pdFALSE);
+}
+
+TEST_F(MotorTaskTest, PowerDown_EmergencySave) {
+    encoder.set_position(12345);
+    mock_rtos::set_notify_return(pdTRUE, 0x02);
+    task.run_once();
+
+    // Verify SPI writes occurred (emergency_save writes to FRAM)
+    EXPECT_GE(mock::get_log().spi_tx_data.size(), 1u);
+    mock_rtos::set_notify_return(pdFALSE);
+}
+
+TEST_F(MotorTaskTest, PowerDown_SetsSpiEmergency) {
+    g_bSpiEmergency = false;
+    mock_rtos::set_notify_return(pdTRUE, 0x02);
+    task.run_once();
+
+    EXPECT_TRUE(g_bSpiEmergency);
+
+    RSP_MESSAGE_S rsp;
+    EXPECT_TRUE(receive_rsp(rsp));
+    EXPECT_EQ(rsp.cmd, cmd::FORCE_STOP);
+    EXPECT_EQ(rsp.param, rsp::POWER_DOWN);
+
+    mock_rtos::set_notify_return(pdFALSE);
+    g_bSpiEmergency = false;
 }

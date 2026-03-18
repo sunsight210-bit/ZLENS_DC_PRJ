@@ -6,6 +6,7 @@
 #include "stall_detect.hpp"
 #include "adc_filter.hpp"
 #include "zoom_table.hpp"
+#include "fram_storage.hpp"
 
 namespace zlens {
 
@@ -19,8 +20,8 @@ public:
     };
 
     void init(MotorCtrl* pMotor, Encoder* pEncoder, StallDetect* pStall,
-              ZoomTable* pZoom, QueueHandle_t cmdQ, QueueHandle_t rspQ,
-              QueueHandle_t saveQ, uint16_t* pAdcCurrent);
+              ZoomTable* pZoom, FramStorage* pFram, QueueHandle_t cmdQ,
+              QueueHandle_t rspQ, QueueHandle_t saveQ, uint16_t* pAdcCurrent);
 
     void run_once();
     void start_homing();
@@ -41,6 +42,7 @@ private:
     Encoder* m_pEncoder = nullptr;
     StallDetect* m_pStall = nullptr;
     ZoomTable* m_pZoom = nullptr;
+    FramStorage* m_pFram = nullptr;
 
     QueueHandle_t m_cmdQueue = nullptr;
     QueueHandle_t m_rspQueue = nullptr;
@@ -68,6 +70,7 @@ private:
     void process_cycling();
     void handle_stall();
     void handle_overcurrent();
+    void handle_power_down();
     void send_response(uint8_t cmd, uint16_t param);
     void send_save(uint8_t reason);
     int32_t clamp_to_soft_limits(int32_t iTarget) const;

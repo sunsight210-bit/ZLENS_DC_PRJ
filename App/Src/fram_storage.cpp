@@ -117,6 +117,13 @@ bool FramStorage::is_valid() {
     return load_params(p);
 }
 
+bool FramStorage::test_rw(uint16_t addr, uint8_t test_byte) {
+    spi_write(addr, &test_byte, 1);
+    uint8_t readback = 0;
+    spi_read(addr, &readback, 1);
+    return readback == test_byte;
+}
+
 void FramStorage::load_params_from_buffer(const FRAM_PARAMS_S& src, FRAM_PARAMS_S& dst) {
     dst = src;
 }

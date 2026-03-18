@@ -19,11 +19,13 @@ typedef struct {
     volatile uint32_t CCR2;
     volatile uint32_t SR;
     volatile uint32_t DIER;
+    volatile uint32_t CCER;
 } TIM_TypeDef;
 
 #define TIM_CR1_DIR    0x0010
 #define TIM_DIER_UIE   0x0001
 #define TIM_SR_UIF     0x0001
+#define TIM_CCER_CC1P  0x0002
 
 typedef struct {
     TIM_TypeDef *Instance;

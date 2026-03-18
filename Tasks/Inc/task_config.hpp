@@ -25,6 +25,7 @@ namespace cmd {
     constexpr uint8_t QUERY_RANGE    = 0x22;
     constexpr uint8_t QUERY_TYPE     = 0x23;
     constexpr uint8_t SWITCH_FACTORY = 0x30;
+    constexpr uint8_t SELF_TEST     = 0x60;
 } // namespace cmd
 
 // --- Factory mode command codes ---
@@ -39,6 +40,7 @@ namespace rsp {
     constexpr uint16_t BUSY            = 0xFFFF;
     constexpr uint16_t STALL_ALARM     = 0x0002;
     constexpr uint16_t OVERCURRENT     = 0x0003;
+    constexpr uint16_t POWER_DOWN      = 0x0005;
 } // namespace rsp
 
 // --- Save reason codes ---
@@ -78,7 +80,7 @@ constexpr uint32_t MONITOR_TASK_PRIORITY = 1;
 constexpr uint32_t MOTOR_TASK_STACK   = 512;
 constexpr uint32_t COMM_TASK_STACK    = 256;
 constexpr uint32_t STORAGE_TASK_STACK = 256;
-constexpr uint32_t MONITOR_TASK_STACK = 256;
+constexpr uint32_t MONITOR_TASK_STACK = 384;
 
 // Global queue handles (defined in main.cpp, extern here)
 extern QueueHandle_t g_cmdQueue;

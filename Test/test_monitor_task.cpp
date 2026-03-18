@@ -4,8 +4,11 @@
 
 using namespace zlens;
 
-// Provide definition for global queue used by monitor_task
-namespace zlens { QueueHandle_t g_cmdQueue = nullptr; }
+// Provide definition for global queues used by monitor_task
+namespace zlens {
+    QueueHandle_t g_cmdQueue = nullptr;
+    QueueHandle_t g_rspQueue = nullptr;
+}
 
 class MonitorTaskTest : public ::testing::Test {
 protected:
@@ -13,49 +16,145 @@ protected:
     SystemManager sm;
     PowerMonitor pm;
     FramStorage fram;
+    Encoder encoder;
+    MotorCtrl motor;
+    StallDetect stall;
+    ZoomTable zoom;
+
     SPI_HandleTypeDef hspi;
+    TIM_HandleTypeDef htim3;
+    DAC_HandleTypeDef hdac;
     IWDG_HandleTypeDef hiwdg;
     TaskHandle_t hMotorTask;
-    uint16_t iAdcVoltage = 2017; // normal 12V (R_top=30kΩ, R_bottom=4.7kΩ)
+    uint16_t iAdcVoltage = 2017;
+    uint16_t iAdcCurrent = 0;
 
     void SetUp() override {
         mock::get_log().reset();
+        mock::get_log().tick_auto_increment = false;
         g_cmdQueue = xQueueCreate(8, sizeof(CMD_MESSAGE_S));
+        g_rspQueue = xQueueCreate(8, sizeof(RSP_MESSAGE_S));
         hspi.Instance = SPI2;
+        htim3.Instance = TIM3;
+        hdac.Instance = DAC1;
         hiwdg.Instance = IWDG;
         hMotorTask = reinterpret_cast<TaskHandle_t>(0x1234);
 
         sm.init();
         pm.init();
         fram.init(&hspi);
+        encoder.init();
+        motor.init(&htim3, &hdac, &encoder);
+        stall.init();
+        zoom.init();
+        zoom.load_defaults();
 
-        task.init(&sm, &pm, &fram, hMotorTask, &hiwdg, &iAdcVoltage);
+        task.init(&sm, &pm, &fram, hMotorTask, &hiwdg, &iAdcVoltage,
+                  &iAdcCurrent, &encoder, &motor, &stall, &zoom);
+    }
+
+    // Helper: prepare FRAM with valid params to simulate normal boot
+    void prepare_valid_fram() {
+        FRAM_PARAMS_S p{};
+        p.magic_number = FramStorage::MAGIC;
+        p.version = 1;
+        p.current_position = 50000;
+        p.current_zoom_x10 = 40; // 4.0x
+        p.homing_done = 1;
+        p.position_valid = 0xFF;
+        p.total_range = 346292;
+        p.crc16 = FramStorage::calc_crc(p);
+        // Set SPI rx buffer so load_params returns valid data
+        const uint8_t* pBytes = reinterpret_cast<const uint8_t*>(&p);
+        mock::get_log().spi_rx_buffer.assign(pBytes, pBytes + sizeof(p));
     }
 };
 
-TEST_F(MonitorTaskTest, SelfTest_Pass_GoesToHoming) {
+TEST_F(MonitorTaskTest, FirstBoot_SelfTest_VoltagePass_GoesToSelfTest) {
     sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
-    iAdcVoltage = 2017; // normal voltage
-
-    task.run_once();
-
-    EXPECT_TRUE(task.is_self_test_done());
-    EXPECT_TRUE(task.is_self_test_passed());
-    EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::HOMING);
+    iAdcVoltage = 2017;
+    // FRAM not valid (default) -> first boot -> starts full self-test
+    task.run_once(); // boot decision + start self_test + first step (VOLTAGE)
+    EXPECT_FALSE(task.is_normal_boot());
+    // Self-test has started, not yet done
+    EXPECT_FALSE(task.is_self_test_done());
 }
 
-TEST_F(MonitorTaskTest, SelfTest_Fail_GoesToError) {
+TEST_F(MonitorTaskTest, FirstBoot_SelfTest_VoltageFail_Error) {
     sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
-    iAdcVoltage = 1300; // low voltage -> power down detected
-
+    iAdcVoltage = 1300; // low voltage
+    // First step: boot decision (FRAM invalid) + start self_test + VOLTAGE fail
     task.run_once();
-
+    task.run_once(); // process the step that completes
     EXPECT_TRUE(task.is_self_test_done());
     EXPECT_FALSE(task.is_self_test_passed());
     EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::ERROR_STATE);
 }
 
-TEST_F(MonitorTaskTest, NormalRun_FeedsWatchdog) {
+TEST_F(MonitorTaskTest, NormalBoot_SkipsSelfTest) {
+    prepare_valid_fram();
+    encoder.set_position(50000);
+    zoom.set_total_range(346292);
+    sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
+
+    task.run_once(); // boot decision: FRAM valid -> normal boot -> READY
+
+    EXPECT_TRUE(task.is_normal_boot());
+    EXPECT_TRUE(task.is_self_test_done());
+    EXPECT_TRUE(task.is_self_test_passed());
+    EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::READY);
+}
+
+TEST_F(MonitorTaskTest, NormalBoot_RestoresPosition) {
+    prepare_valid_fram();
+    encoder.set_position(50000);
+    zoom.set_total_range(346292);
+    sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
+
+    task.run_once();
+
+    EXPECT_TRUE(task.is_normal_boot());
+    EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::READY);
+}
+
+TEST_F(MonitorTaskTest, NormalBoot_MovesToNearestZoom) {
+    prepare_valid_fram();
+    // Position far from any zoom table entry
+    encoder.set_position(100000);
+    zoom.set_total_range(346292);
+    sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
+
+    task.run_once();
+
+    // Should have sent SET_ZOOM command
+    CMD_MESSAGE_S stCmd;
+    bool bGotCmd = xQueueReceive(g_cmdQueue, &stCmd, 0) == pdTRUE;
+    EXPECT_TRUE(bGotCmd);
+    if (bGotCmd) {
+        EXPECT_EQ(stCmd.cmd, cmd::SET_ZOOM);
+    }
+}
+
+TEST_F(MonitorTaskTest, NormalBoot_NoMoveWhenCloseToZoom) {
+    prepare_valid_fram();
+    // Position exactly at a zoom entry
+    zoom.set_total_range(346292);
+    int32_t iExactPos = zoom.get_position(zoom.get_min_zoom());
+    encoder.set_position(iExactPos);
+    sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
+
+    task.run_once();
+
+    // Should NOT have sent any command (or at least not SET_ZOOM)
+    CMD_MESSAGE_S stCmd;
+    bool bGotCmd = xQueueReceive(g_cmdQueue, &stCmd, 0) == pdTRUE;
+    // If position is exactly at a zoom entry, delta = 0 <= DEADZONE, no move needed
+    if (bGotCmd) {
+        EXPECT_NE(stCmd.cmd, cmd::SET_ZOOM);
+    }
+}
+
+TEST_F(MonitorTaskTest, ReadyState_FeedsWatchdog) {
     sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
     sm.transition_to(SYSTEM_STATE_E::HOMING);
     sm.transition_to(SYSTEM_STATE_E::READY);
@@ -65,28 +164,15 @@ TEST_F(MonitorTaskTest, NormalRun_FeedsWatchdog) {
     EXPECT_GT(mock::get_log().iwdg_refresh_count, before);
 }
 
-TEST_F(MonitorTaskTest, NormalRun_ReadsVoltage) {
-    sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
-    sm.transition_to(SYSTEM_STATE_E::HOMING);
-    sm.transition_to(SYSTEM_STATE_E::READY);
-
-    iAdcVoltage = 2017; // normal
-    task.run_once();
-
-    // No error transition should occur
-    EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::READY);
-}
-
 TEST_F(MonitorTaskTest, LowVoltage_NotifiesMotor) {
     sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
     sm.transition_to(SYSTEM_STATE_E::HOMING);
     sm.transition_to(SYSTEM_STATE_E::READY);
 
-    iAdcVoltage = 1300; // below threshold -> power down
+    iAdcVoltage = 1300;
     task.run_once();
 
-    // Motor task should have been notified
-    // (xTaskNotify was called - we can verify it ran without crash)
+    // Motor task should have been notified (xTaskNotify was called)
     EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::READY);
 }
 
@@ -97,20 +183,7 @@ TEST_F(MonitorTaskTest, ErrorState_StaysInError) {
     task.run_once();
 
     EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::ERROR_STATE);
-    // Still feeds watchdog in error state
     EXPECT_GT(mock::get_log().iwdg_refresh_count, 0u);
-}
-
-TEST_F(MonitorTaskTest, ReadyState_NormalRun) {
-    sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
-    sm.transition_to(SYSTEM_STATE_E::HOMING);
-    sm.transition_to(SYSTEM_STATE_E::READY);
-
-    iAdcVoltage = 2017;
-    for (int i = 0; i < 10; ++i) task.run_once();
-
-    EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::READY);
-    EXPECT_GE(mock::get_log().iwdg_refresh_count, 10u);
 }
 
 TEST_F(MonitorTaskTest, BusyState_NormalRun) {

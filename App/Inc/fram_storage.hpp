@@ -32,7 +32,8 @@ struct FRAM_PARAMS_S {
     uint8_t  position_valid;
     int16_t  encoder_overflow;
     uint8_t  last_save_reason;
-    uint8_t  reserved[14];
+    uint8_t  encoder_compensated;
+    uint8_t  reserved[13];
     uint16_t crc16;
 };
 #pragma pack(pop)
@@ -51,6 +52,7 @@ public:
     bool load_params(FRAM_PARAMS_S& params);
     void emergency_save(int32_t position);
     bool is_valid();
+    bool test_rw(uint16_t addr, uint8_t test_byte);
 
     // For testing
     void load_params_from_buffer(const FRAM_PARAMS_S& src, FRAM_PARAMS_S& dst);

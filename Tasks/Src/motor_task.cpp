@@ -8,12 +8,13 @@
 namespace zlens {
 
 void MotorTask::init(MotorCtrl* pMotor, Encoder* pEncoder, StallDetect* pStall,
-                     ZoomTable* pZoom, QueueHandle_t cmdQ, QueueHandle_t rspQ,
-                     QueueHandle_t saveQ, uint16_t* pAdcCurrent) {
+                     ZoomTable* pZoom, FramStorage* pFram, QueueHandle_t cmdQ,
+                     QueueHandle_t rspQ, QueueHandle_t saveQ, uint16_t* pAdcCurrent) {
     m_pMotor = pMotor;
     m_pEncoder = pEncoder;
     m_pStall = pStall;
     m_pZoom = pZoom;
+    m_pFram = pFram;
     m_cmdQueue = cmdQ;
     m_rspQueue = rspQ;
     m_saveQueue = saveQ;
@@ -26,6 +27,15 @@ void MotorTask::init(MotorCtrl* pMotor, Encoder* pEncoder, StallDetect* pStall,
 }
 
 void MotorTask::run_once() {
+    // Check for power-down notification (highest priority)
+    uint32_t iNotifyVal = 0;
+    if (xTaskNotifyWait(0, 0x02, &iNotifyVal, 0) == pdTRUE) {
+        if (iNotifyVal & 0x02) {
+            handle_power_down();
+            return;
+        }
+    }
+
     int32_t iPos = m_pEncoder->get_position();
     uint16_t iAdcRaw = m_pAdcCurrent ? *m_pAdcCurrent : 0;
     uint16_t iAdcFiltered = m_AdcCurrentFilter.update(iAdcRaw);
@@ -205,6 +215,19 @@ void MotorTask::handle_stall() {
     }
 }
 
+void MotorTask::handle_power_down() {
+    m_pMotor->emergency_stop();
+    g_bSpiEmergency = true;
+    m_pFram->emergency_save(m_pEncoder->get_position());
+    m_pStall->reset();
+    m_eTaskState = TASK_STATE_E::IDLE;
+    send_response(cmd::FORCE_STOP, rsp::POWER_DOWN);
+#ifndef BUILD_TESTING
+    swo_printf("[WARN] Power down detected, emergency save position=%ld\n",
+               static_cast<long>(m_pEncoder->get_position()));
+#endif
+}
+
 void MotorTask::handle_overcurrent() {
     // During homing, overcurrent at physical limit is expected — treat as stall
     if (m_eTaskState == TASK_STATE_E::HOMING_REVERSE ||
@@ -326,7 +349,7 @@ extern "C" void motor_task_entry(void* params) {
 
     static MotorTask task;
     task.init(&g_Motor, &g_Encoder, &g_StallDetect, &g_ZoomTable,
-              g_cmdQueue, g_rspQueue, g_saveQueue,
+              &g_FramStorage, g_cmdQueue, g_rspQueue, g_saveQueue,
               const_cast<uint16_t*>(&g_aAdcDmaBuf[0]));
 
     TickType_t xLastWake = xTaskGetTickCount();
