@@ -486,14 +486,16 @@ static void MX_TIM8_Init(void)
   htim8.Init.RepetitionCounter = 0;
   htim8.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
-  sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
+  // TODO-HW: 编码器 A/B 通道接反，软件反转 IC1 极性补偿
+  //          硬件修改后改回 TIM_ICPOLARITY_RISING 并删除此注释
+  sConfig.IC1Polarity = TIM_ICPOLARITY_FALLING;
   sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
   sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC1Filter = 0;
+  sConfig.IC1Filter = 0x0F;
   sConfig.IC2Polarity = TIM_ICPOLARITY_RISING;
   sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
   sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC2Filter = 0;
+  sConfig.IC2Filter = 0x0F;
   if (HAL_TIM_Encoder_Init(&htim8, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -651,6 +653,13 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     HAL_IncTick();
   }
   /* USER CODE BEGIN Callback 1 */
+  if (htim->Instance == TIM8)
+  {
+    extern void encoder_overflow_handler(int up);
+    // DIR bit: 0 = counting up (overflow), 1 = counting down (underflow)
+    int up = !(TIM8->CR1 & TIM_CR1_DIR);
+    encoder_overflow_handler(up);
+  }
 
   /* USER CODE END Callback 1 */
 }

@@ -51,7 +51,7 @@ TEST_F(StallDetectTest, StallResets_OnLowCurrent) {
 TEST_F(StallDetectTest, Overcurrent_FastResponse) {
     sd.start_motor();
     for (int i = 0; i < 200; ++i) sd.update(50, 0, i * 100);
-    for (int i = 0; i < 10; ++i) sd.update(400, 0, (200 + i) * 100);
+    for (int i = 0; i < 50; ++i) sd.update(1100, 0, (200 + i) * 100);
     EXPECT_TRUE(sd.is_overcurrent());
 }
 

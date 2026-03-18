@@ -4,6 +4,7 @@
 #include "motor_ctrl.hpp"
 #include "encoder.hpp"
 #include "stall_detect.hpp"
+#include "adc_filter.hpp"
 #include "zoom_table.hpp"
 
 namespace zlens {
@@ -45,6 +46,7 @@ private:
     QueueHandle_t m_rspQueue = nullptr;
     QueueHandle_t m_saveQueue = nullptr;
     uint16_t* m_pAdcCurrent = nullptr;
+    AdcFilter m_AdcCurrentFilter;
 
     TASK_STATE_E m_eTaskState = TASK_STATE_E::IDLE;
     bool m_bHomingDone = false;

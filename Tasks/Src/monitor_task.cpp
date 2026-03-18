@@ -29,10 +29,17 @@ void MonitorTask::run_once() {
             m_bSelfTestPassed = run_self_test();
             m_bSelfTestDone = true;
             if (m_bSelfTestPassed) {
+#ifndef BUILD_TESTING
+                swo_printf("[PASS] Self-test passed\n");
+#endif
                 m_pSm->transition_to(SYSTEM_STATE_E::HOMING);
-                // Notify motor task to start homing
-                xTaskNotify(m_hMotorTask, 1, eSetBits);
+                // Send HOMING command to motor task via queue
+                CMD_MESSAGE_S stCmd = {cmd::HOMING, 0};
+                xQueueSend(g_cmdQueue, &stCmd, 0);
             } else {
+#ifndef BUILD_TESTING
+                swo_printf("[FAIL] Self-test failed\n");
+#endif
                 m_pSm->transition_to(SYSTEM_STATE_E::ERROR_STATE);
             }
         }
@@ -63,6 +70,10 @@ bool MonitorTask::run_self_test() {
     // Check ADC baseline (voltage should be reasonable)
     if (m_pAdcVoltage) {
         uint16_t iAdcVal = *m_pAdcVoltage;
+#ifndef BUILD_TESTING
+        swo_printf("[INFO] Self-test ADC value: %u (threshold: %u)\n",
+                   iAdcVal, PowerMonitor::POWER_DOWN_THRESHOLD);
+#endif
         if (m_pPm->is_power_down(iAdcVal)) {
             return false; // Voltage too low
         }
@@ -103,6 +114,9 @@ extern "C" void monitor_task_entry(void* params) {
 
     g_SystemManager.transition_to(SYSTEM_STATE_E::SELF_TEST);
     swo_printf("[PASS] FreeRTOS scheduler running\n");
+
+    // Wait for ADC DMA to complete at least one conversion cycle
+    vTaskDelay(pdMS_TO_TICKS(50));
 
     TickType_t xLastWake = xTaskGetTickCount();
     for (;;) {

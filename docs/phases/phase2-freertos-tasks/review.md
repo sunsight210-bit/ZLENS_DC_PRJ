@@ -14,7 +14,7 @@
 - ITM 4 字节帧格式（header=0x03 + char + 0x00x3）需要专门的解码脚本
 
 ## 遗留问题
-- flash_and_test.sh 中的 SWO 解析尚未处理 ITM 帧解码（grep 直接匹配因 NUL 字节失败）
+- ~~flash_and_test.sh 中的 SWO 解析尚未处理 ITM 帧解码~~ → 已修复（itm_decode.py + flash_and_test.sh 集成）
 - MonitorTask 的自检目前只检查 ADC 电压基线，未检查 FRAM 连通性（首次启动无有效数据）
 - 看门狗 IWDG 已初始化但 MonitorTask 的喂狗周期（100ms）需在实际运行中确认是否足够
 

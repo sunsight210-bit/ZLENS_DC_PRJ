@@ -12,12 +12,18 @@ enum { GPIO_PIN_SET = 1, GPIO_PIN_RESET = 0 };
 
 // --- TIM ---
 typedef struct {
+    volatile uint32_t CR1;
     volatile uint32_t CNT;
     volatile uint32_t ARR;
     volatile uint32_t CCR1;
     volatile uint32_t CCR2;
     volatile uint32_t SR;
+    volatile uint32_t DIER;
 } TIM_TypeDef;
+
+#define TIM_CR1_DIR    0x0010
+#define TIM_DIER_UIE   0x0001
+#define TIM_SR_UIF     0x0001
 
 typedef struct {
     TIM_TypeDef *Instance;

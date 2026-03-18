@@ -67,6 +67,14 @@ target_include_directories(test_fram_storage PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/mocks ${CMAKE_SOURCE_DIR}/App/Inc)
 add_test(NAME test_fram_storage COMMAND test_fram_storage)
 
+# --- AdcFilter ---
+add_executable(test_adc_filter test_adc_filter.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/adc_filter.cpp)
+target_link_libraries(test_adc_filter PRIVATE zlens_mocks GTest::gtest_main)
+target_include_directories(test_adc_filter PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/mocks ${CMAKE_SOURCE_DIR}/App/Inc)
+add_test(NAME test_adc_filter COMMAND test_adc_filter)
+
 # --- StallDetect ---
 add_executable(test_stall_detect test_stall_detect.cpp
     ${CMAKE_SOURCE_DIR}/App/Src/stall_detect.cpp)
@@ -112,6 +120,7 @@ zlens_add_test(test_motor_task test_motor_task.cpp
     ${CMAKE_SOURCE_DIR}/App/Src/stall_detect.cpp
     ${CMAKE_SOURCE_DIR}/App/Src/zoom_table.cpp
     ${CMAKE_SOURCE_DIR}/App/Src/crc16.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/adc_filter.cpp
 )
 
 # --- CommTask ---

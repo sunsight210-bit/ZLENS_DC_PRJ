@@ -1,7 +1,18 @@
 # CMakeLists.txt
 cmake_minimum_required(VERSION 3.20)
 
+# 禁止在 build/ 根目录构建
+get_filename_component(_build_dir_name "${CMAKE_BINARY_DIR}" NAME)
+if(_build_dir_name STREQUAL "build")
+    message(FATAL_ERROR
+        "Do not use 'build/' directly. Use:\n"
+        "  cmake -B build/fw  -DCMAKE_TOOLCHAIN_FILE=cmake/stm32f103rc.cmake\n"
+        "  cmake -B build/test -DBUILD_TESTING=ON\n"
+        "  cmake -B build/diag -DCMAKE_TOOLCHAIN_FILE=cmake/stm32f103rc.cmake -DBUILD_DIAG=ON")
+endif()
+
 option(BUILD_TESTING "Build unit tests for host" OFF)
+option(BUILD_DIAG "Build diagnostic firmware" OFF)
 
 if(BUILD_TESTING)
     project(ZLENS_DC_Test LANGUAGES C CXX)
@@ -17,6 +28,8 @@ if(BUILD_TESTING)
     enable_testing()
 
     add_subdirectory(Test)
+elseif(BUILD_DIAG)
+    add_subdirectory(Test/diag)
 else()
     project(ZLENS_DC LANGUAGES C CXX ASM)
     set(CMAKE_CXX_STANDARD 17)

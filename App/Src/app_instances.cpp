@@ -60,6 +60,9 @@ extern "C" void app_init(void) {
     g_SystemManager.init();
     g_PowerMonitor.init();
 
+    // ADC self-calibration (must be done after HAL_ADC_Init, before start)
+    HAL_ADCEx_Calibration_Start(&hadc1);
+
     // Start ADC DMA continuous conversion
     HAL_ADC_Start_DMA(&hadc1,
                        reinterpret_cast<uint32_t*>(
@@ -70,8 +73,11 @@ extern "C" void app_init(void) {
     HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
     HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
 
-    // Start TIM8 encoder
+    // Start TIM8 encoder + enable overflow interrupt for 32-bit position
     HAL_TIM_Encoder_Start(&htim8, TIM_CHANNEL_ALL);
+    __HAL_TIM_ENABLE_IT(&htim8, TIM_IT_UPDATE);
+    HAL_NVIC_SetPriority(TIM8_UP_IRQn, 5, 0);
+    HAL_NVIC_EnableIRQ(TIM8_UP_IRQn);
 
     // Create FreeRTOS tasks
     TaskHandle_t hMotorTask = nullptr;

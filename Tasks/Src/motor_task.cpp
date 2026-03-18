@@ -2,6 +2,7 @@
 #include "motor_task.hpp"
 #ifndef BUILD_TESTING
 #include "app_instances.hpp"
+#include "swo_debug.hpp"
 #endif
 
 namespace zlens {
@@ -21,13 +22,15 @@ void MotorTask::init(MotorCtrl* pMotor, Encoder* pEncoder, StallDetect* pStall,
     m_bHomingDone = false;
     m_iZOffset = 0;
     m_iTotalRange = 0;
+    m_AdcCurrentFilter.reset(0);
 }
 
 void MotorTask::run_once() {
     int32_t iPos = m_pEncoder->get_position();
-    uint16_t iAdcCurrent = m_pAdcCurrent ? *m_pAdcCurrent : 0;
+    uint16_t iAdcRaw = m_pAdcCurrent ? *m_pAdcCurrent : 0;
+    uint16_t iAdcFiltered = m_AdcCurrentFilter.update(iAdcRaw);
 
-    m_pStall->update(iAdcCurrent, iPos, HAL_GetTick());
+    m_pStall->update(iAdcFiltered, iPos, HAL_GetTick());
     m_pMotor->update();
 
     // Overcurrent: highest priority (any state except IDLE)
@@ -113,6 +116,9 @@ void MotorTask::start_homing() {
     m_pStall->set_direction(StallDetect::Direction::REVERSE);
     m_pStall->start_motor();
     m_pMotor->move_to(-HOMING_FAR_DISTANCE);
+#ifndef BUILD_TESTING
+    swo_printf("[INFO] Homing started: reverse to min limit\n");
+#endif
 }
 
 void MotorTask::process_moving() {
@@ -147,6 +153,11 @@ void MotorTask::process_homing() {
             send_response(cmd::HOMING, rsp::OK);
             send_save(save_reason::ARRIVED);
             m_eTaskState = TASK_STATE_E::IDLE;
+#ifndef BUILD_TESTING
+            swo_printf("[PASS] Homing complete: range=%ld, pos=%ld\n",
+                       static_cast<long>(m_iTotalRange),
+                       static_cast<long>(m_pEncoder->get_position()));
+#endif
         }
         break;
     default:
@@ -163,6 +174,10 @@ void MotorTask::handle_stall() {
         m_pStall->reset();
         m_eTaskState = TASK_STATE_E::HOMING_RETRACT;
         m_pMotor->move_to(HOMING_RETRACT_DISTANCE);
+#ifndef BUILD_TESTING
+        swo_printf("[INFO] Homing: min limit found, retracting %ld counts\n",
+                   static_cast<long>(HOMING_RETRACT_DISTANCE));
+#endif
         break;
     case TASK_STATE_E::HOMING_FORWARD:
         // Expected stall: at max limit, record total range
@@ -171,6 +186,10 @@ void MotorTask::handle_stall() {
         m_pStall->reset();
         m_eTaskState = TASK_STATE_E::HOMING_TO_SOFT_MIN;
         m_pMotor->move_to(SOFT_LIMIT_OFFSET);
+#ifndef BUILD_TESTING
+        swo_printf("[INFO] Homing: max limit found, range=%ld\n",
+                   static_cast<long>(m_iTotalRange));
+#endif
         break;
     default:
         // Unexpected stall during normal operation
@@ -179,16 +198,31 @@ void MotorTask::handle_stall() {
         m_eTaskState = TASK_STATE_E::IDLE;
         send_response(cmd::FORCE_STOP, rsp::STALL_ALARM);
         send_save(save_reason::STALL);
+#ifndef BUILD_TESTING
+        swo_printf("[FAIL] Unexpected stall during operation\n");
+#endif
         break;
     }
 }
 
 void MotorTask::handle_overcurrent() {
+    // During homing, overcurrent at physical limit is expected — treat as stall
+    if (m_eTaskState == TASK_STATE_E::HOMING_REVERSE ||
+        m_eTaskState == TASK_STATE_E::HOMING_FORWARD) {
+        handle_stall();
+        return;
+    }
+
     m_pMotor->emergency_stop();
     m_pStall->reset();
     m_eTaskState = TASK_STATE_E::IDLE;
     send_response(cmd::FORCE_STOP, rsp::OVERCURRENT);
     send_save(save_reason::STALL);
+#ifndef BUILD_TESTING
+    uint16_t iAdcCurrent = m_pAdcCurrent ? *m_pAdcCurrent : 0;
+    swo_printf("[FAIL] Overcurrent detected, ADC=%u (threshold=%u), emergency stop\n",
+               iAdcCurrent, StallDetect::OVERCURRENT_THRESHOLD);
+#endif
 }
 
 void MotorTask::start_cycle(int8_t iStep, uint8_t iDwell_x100ms) {

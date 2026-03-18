@@ -4,6 +4,9 @@
 
 using namespace zlens;
 
+// Provide definition for global queue used by monitor_task
+namespace zlens { QueueHandle_t g_cmdQueue = nullptr; }
+
 class MonitorTaskTest : public ::testing::Test {
 protected:
     MonitorTask task;
@@ -13,10 +16,11 @@ protected:
     SPI_HandleTypeDef hspi;
     IWDG_HandleTypeDef hiwdg;
     TaskHandle_t hMotorTask;
-    uint16_t iAdcVoltage = 3723; // normal 12V
+    uint16_t iAdcVoltage = 2017; // normal 12V (R_top=30kΩ, R_bottom=4.7kΩ)
 
     void SetUp() override {
         mock::get_log().reset();
+        g_cmdQueue = xQueueCreate(8, sizeof(CMD_MESSAGE_S));
         hspi.Instance = SPI2;
         hiwdg.Instance = IWDG;
         hMotorTask = reinterpret_cast<TaskHandle_t>(0x1234);
@@ -31,7 +35,7 @@ protected:
 
 TEST_F(MonitorTaskTest, SelfTest_Pass_GoesToHoming) {
     sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
-    iAdcVoltage = 3723; // normal voltage
+    iAdcVoltage = 2017; // normal voltage
 
     task.run_once();
 
@@ -42,7 +46,7 @@ TEST_F(MonitorTaskTest, SelfTest_Pass_GoesToHoming) {
 
 TEST_F(MonitorTaskTest, SelfTest_Fail_GoesToError) {
     sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
-    iAdcVoltage = 2000; // low voltage -> power down detected
+    iAdcVoltage = 1300; // low voltage -> power down detected
 
     task.run_once();
 
@@ -66,7 +70,7 @@ TEST_F(MonitorTaskTest, NormalRun_ReadsVoltage) {
     sm.transition_to(SYSTEM_STATE_E::HOMING);
     sm.transition_to(SYSTEM_STATE_E::READY);
 
-    iAdcVoltage = 3723; // normal
+    iAdcVoltage = 2017; // normal
     task.run_once();
 
     // No error transition should occur
@@ -78,7 +82,7 @@ TEST_F(MonitorTaskTest, LowVoltage_NotifiesMotor) {
     sm.transition_to(SYSTEM_STATE_E::HOMING);
     sm.transition_to(SYSTEM_STATE_E::READY);
 
-    iAdcVoltage = 2000; // below threshold -> power down
+    iAdcVoltage = 1300; // below threshold -> power down
     task.run_once();
 
     // Motor task should have been notified
@@ -102,7 +106,7 @@ TEST_F(MonitorTaskTest, ReadyState_NormalRun) {
     sm.transition_to(SYSTEM_STATE_E::HOMING);
     sm.transition_to(SYSTEM_STATE_E::READY);
 
-    iAdcVoltage = 3723;
+    iAdcVoltage = 2017;
     for (int i = 0; i < 10; ++i) task.run_once();
 
     EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::READY);
@@ -115,7 +119,7 @@ TEST_F(MonitorTaskTest, BusyState_NormalRun) {
     sm.transition_to(SYSTEM_STATE_E::READY);
     sm.transition_to(SYSTEM_STATE_E::BUSY);
 
-    iAdcVoltage = 3723;
+    iAdcVoltage = 2017;
     task.run_once();
 
     EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::BUSY);

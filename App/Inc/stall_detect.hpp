@@ -10,10 +10,11 @@ public:
     enum class LimitType { LIMIT_MIN, LIMIT_MAX };
 
     static constexpr uint16_t STALL_THRESHOLD = 200;
-    static constexpr uint16_t OVERCURRENT_THRESHOLD = 350;
+    // Calibrated: running peak max=844, set above with margin
+    static constexpr uint16_t OVERCURRENT_THRESHOLD = 1000;
     static constexpr uint16_t BLANKING_TICKS = 200;
     static constexpr uint16_t STALL_CONFIRM_COUNT = 1000;
-    static constexpr uint16_t OVERCURRENT_CONFIRM = 10;
+    static constexpr uint16_t OVERCURRENT_CONFIRM = 50;
     static constexpr uint16_t ENCODER_STALL_TICKS = 500;
 
     void init();

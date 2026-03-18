@@ -73,10 +73,13 @@ void MotorCtrl::update() {
     if (m_eState == MOTOR_STATE_E::IDLE || m_eState == MOTOR_STATE_E::STALLED) return;
 
     int32_t pos = m_pEncoder->get_position();
-    int32_t remaining = std::abs(m_iTarget - pos);
+    int32_t diff = m_iTarget - pos;
+    int32_t remaining = std::abs(diff);
 
-    // Check arrival
-    if (remaining <= DEADZONE) {
+    // Check arrival or overshoot (passed target beyond DEADZONE)
+    bool bOvershot = (m_eDirection == DIRECTION_E::FORWARD && diff < -DEADZONE) ||
+                     (m_eDirection == DIRECTION_E::REVERSE && diff > DEADZONE);
+    if (remaining <= DEADZONE || bOvershot) {
         brake();
         m_iCurrentSpeed = 0;
         m_eState = MOTOR_STATE_E::IDLE;

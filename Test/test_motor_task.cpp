@@ -51,18 +51,20 @@ protected:
     }
 
     // Run enough stall cycles to trigger stall detection
+    // EMA filter needs ~64 extra iterations to converge from 0 to adc_val
     void trigger_stall(uint16_t adc_val = 250) {
         iAdcCurrent = adc_val;
-        // Blanking window + stall confirm
-        for (int i = 0; i < StallDetect::BLANKING_TICKS + StallDetect::STALL_CONFIRM_COUNT + 10; ++i) {
+        // EMA convergence + blanking window + stall confirm
+        for (int i = 0; i < 64 + StallDetect::BLANKING_TICKS + StallDetect::STALL_CONFIRM_COUNT + 10; ++i) {
             task.run_once();
         }
     }
 
     // Run enough cycles for overcurrent
     void trigger_overcurrent() {
-        iAdcCurrent = 400; // > OVERCURRENT_THRESHOLD
-        for (int i = 0; i < StallDetect::BLANKING_TICKS + StallDetect::OVERCURRENT_CONFIRM + 10; ++i) {
+        iAdcCurrent = 1100; // > OVERCURRENT_THRESHOLD (1000)
+        // EMA convergence + blanking + overcurrent confirm
+        for (int i = 0; i < 64 + StallDetect::BLANKING_TICKS + StallDetect::OVERCURRENT_CONFIRM + 10; ++i) {
             task.run_once();
         }
     }
@@ -167,6 +169,7 @@ TEST_F(MotorTaskTest, HomingFindZ_RecordsOffset) {
     encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
     // Simulate a Z pulse at some position
     encoder.handle_z_pulse();
+    iAdcCurrent = 0;
 
     // Run until motor arrives
     for (int i = 0; i < 10; ++i) task.run_once();
@@ -182,15 +185,13 @@ TEST_F(MotorTaskTest, HomingForward_RecordsRange) {
 
     // Complete retract
     encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
+    iAdcCurrent = 0;
     for (int i = 0; i < 10; ++i) task.run_once();
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_FORWARD);
 
     // Simulate forward movement to some position then stall
     encoder.set_position(50000);
-    iAdcCurrent = 250;
-    for (int i = 0; i < StallDetect::BLANKING_TICKS + StallDetect::STALL_CONFIRM_COUNT + 10; ++i) {
-        task.run_once();
-    }
+    trigger_stall();
 
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_TO_SOFT_MIN);
     EXPECT_EQ(task.get_total_range(), 50000);
@@ -202,13 +203,11 @@ TEST_F(MotorTaskTest, HomingComplete_SavesParams) {
     trigger_stall(); // REVERSE -> RETRACT
 
     encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
+    iAdcCurrent = 0;
     for (int i = 0; i < 10; ++i) task.run_once();
 
     encoder.set_position(50000);
-    iAdcCurrent = 250;
-    for (int i = 0; i < StallDetect::BLANKING_TICKS + StallDetect::STALL_CONFIRM_COUNT + 10; ++i) {
-        task.run_once();
-    }
+    trigger_stall();
     // Now in HOMING_TO_SOFT_MIN
 
     // Simulate arrival at soft min
@@ -257,12 +256,10 @@ TEST_F(MotorTaskTest, SoftLimit_ClampsTarget) {
     task.start_homing();
     trigger_stall();
     encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
+    iAdcCurrent = 0;
     for (int i = 0; i < 10; ++i) task.run_once();
     encoder.set_position(50000);
-    iAdcCurrent = 250;
-    for (int i = 0; i < StallDetect::BLANKING_TICKS + StallDetect::STALL_CONFIRM_COUNT + 10; ++i) {
-        task.run_once();
-    }
+    trigger_stall();
     encoder.set_position(MotorTask::SOFT_LIMIT_OFFSET);
     iAdcCurrent = 0;
     for (int i = 0; i < 10; ++i) task.run_once();
