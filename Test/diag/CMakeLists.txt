@@ -6,6 +6,11 @@ project(ZLENS_DIAG LANGUAGES C CXX ASM)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Select diag source: -DDIAG_SOURCE=phase4_heat_diag.cpp (default: phase3_motor_diag.cpp)
+if(NOT DEFINED DIAG_SOURCE)
+    set(DIAG_SOURCE "phase3_motor_diag.cpp")
+endif()
+
 add_definitions(-DSTM32F103xE -DUSE_HAL_DRIVER)
 
 # Reuse product sources (Core, HAL, FreeRTOS, App)
@@ -36,7 +41,7 @@ add_executable(${PROJECT_NAME}.elf
     ${FREERTOS_CMSIS}
     ${FREERTOS_PORT}
     ${FREERTOS_HEAP}
-    ${CMAKE_CURRENT_SOURCE_DIR}/phase3_motor_diag.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/${DIAG_SOURCE}
 )
 
 target_include_directories(${PROJECT_NAME}.elf PRIVATE
