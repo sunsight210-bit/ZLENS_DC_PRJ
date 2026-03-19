@@ -84,6 +84,10 @@ void MotorTask::run_once() {
 }
 
 void MotorTask::dispatch_command(const CMD_MESSAGE_S& stCmd) {
+#ifndef BUILD_TESTING
+    swo_printf("[MOTOR] CMD 0x%02X param=0x%04X state=%d\n",
+               stCmd.cmd, stCmd.param, (int)m_eTaskState);
+#endif
     switch (stCmd.cmd) {
     case cmd::SET_ZOOM: {
         if (m_eTaskState != TASK_STATE_E::IDLE) break;
@@ -112,6 +116,40 @@ void MotorTask::dispatch_command(const CMD_MESSAGE_S& stCmd) {
         m_pSm->transition_to(SYSTEM_STATE_E::READY);
         send_response(cmd::FORCE_STOP, rsp::OK);
         break;
+    case cmd::ZOOM_INC: {
+        if (m_eTaskState != TASK_STATE_E::IDLE) break;
+        m_pSm->transition_to(SYSTEM_STATE_E::BUSY);
+        int32_t iPos = m_pEncoder->get_position();
+        uint16_t iCurZoom = m_pZoom->get_nearest_zoom(iPos);
+        uint16_t iNewZoom = iCurZoom + stCmd.param;
+        uint16_t iMaxZoom = m_pZoom->get_max_zoom();
+        if (iNewZoom > iMaxZoom) iNewZoom = iMaxZoom;
+        int32_t iTarget = m_pZoom->get_position(iNewZoom);
+        iTarget = clamp_to_soft_limits(iTarget);
+        m_pStall->set_direction(iTarget > iPos
+            ? StallDetect::Direction::FORWARD : StallDetect::Direction::REVERSE);
+        m_pStall->start_motor();
+        m_pMotor->move_to(iTarget);
+        m_eTaskState = TASK_STATE_E::MOVING;
+        break;
+    }
+    case cmd::ZOOM_DEC: {
+        if (m_eTaskState != TASK_STATE_E::IDLE) break;
+        m_pSm->transition_to(SYSTEM_STATE_E::BUSY);
+        int32_t iPos = m_pEncoder->get_position();
+        uint16_t iCurZoom = m_pZoom->get_nearest_zoom(iPos);
+        uint16_t iMinZoom = m_pZoom->get_min_zoom();
+        uint16_t iNewZoom = (stCmd.param >= iCurZoom) ? iMinZoom
+                            : (iCurZoom - stCmd.param < iMinZoom ? iMinZoom : iCurZoom - stCmd.param);
+        int32_t iTarget = m_pZoom->get_position(iNewZoom);
+        iTarget = clamp_to_soft_limits(iTarget);
+        m_pStall->set_direction(iTarget > iPos
+            ? StallDetect::Direction::FORWARD : StallDetect::Direction::REVERSE);
+        m_pStall->start_motor();
+        m_pMotor->move_to(iTarget);
+        m_eTaskState = TASK_STATE_E::MOVING;
+        break;
+    }
     case cmd::CYCLE_START:
         if (m_eTaskState != TASK_STATE_E::IDLE) break;
         m_pSm->transition_to(SYSTEM_STATE_E::BUSY);
@@ -142,7 +180,8 @@ void MotorTask::process_moving() {
         int32_t iPos = m_pEncoder->get_position();
         uint16_t iZoom = m_pZoom->get_nearest_zoom(iPos);
         m_pStall->reset();
-        send_response(cmd::SET_ZOOM, iZoom);
+        send_response(rsp_cmd::ZOOM, iZoom);
+        send_response(rsp_cmd::ARRIVED, rsp::ARRIVED_PARAM);
         send_save(save_reason::ARRIVED);
         m_eTaskState = TASK_STATE_E::IDLE;
         m_pSm->transition_to(SYSTEM_STATE_E::READY);
@@ -155,6 +194,10 @@ void MotorTask::process_homing() {
         if (m_pMotor->get_state() == MOTOR_STATE_E::IDLE) {
             // Retract done, record Z offset and start forward
             m_iZOffset = m_pEncoder->get_z_position();
+#ifndef BUILD_TESTING
+            swo_printf("[INFO] Homing: retract done, Z offset=%ld, starting forward scan\n",
+                       static_cast<long>(m_iZOffset));
+#endif
             m_eTaskState = TASK_STATE_E::HOMING_FORWARD;
             m_pStall->set_direction(StallDetect::Direction::FORWARD);
             m_pStall->start_motor();
@@ -167,7 +210,14 @@ void MotorTask::process_homing() {
             m_pZoom->set_total_range(m_iTotalRange);
             m_bHomingDone = true;
             m_pStall->reset();
-            send_response(cmd::HOMING, rsp::OK);
+            int32_t iPos = m_pEncoder->get_position();
+            uint16_t iZoom = m_pZoom->get_nearest_zoom(iPos);
+#ifndef BUILD_TESTING
+            swo_printf("[INFO] Homing: soft min reached, pos=%ld, sending ZOOM=%u + HOMING_DONE\n",
+                       static_cast<long>(iPos), iZoom);
+#endif
+            send_response(rsp_cmd::ZOOM, iZoom);
+            send_response(rsp_cmd::HOMING_DONE, rsp::HOMING_DONE_PARAM);
             send_save(save_reason::ARRIVED);
             m_eTaskState = TASK_STATE_E::IDLE;
             m_pSm->transition_to(SYSTEM_STATE_E::READY);
@@ -203,10 +253,52 @@ void MotorTask::handle_stall() {
         m_iTotalRange = m_pEncoder->get_position();
         m_pStall->reset();
         m_eTaskState = TASK_STATE_E::HOMING_TO_SOFT_MIN;
+        m_pStall->set_direction(StallDetect::Direction::REVERSE);
+        m_pStall->start_motor();
         m_pMotor->move_to(SOFT_LIMIT_OFFSET);
 #ifndef BUILD_TESTING
-        swo_printf("[INFO] Homing: max limit found, range=%ld\n",
+        swo_printf("[INFO] Homing: max limit found, range=%ld, moving to soft min\n",
                    static_cast<long>(m_iTotalRange));
+#endif
+        break;
+    case TASK_STATE_E::HOMING_TO_SOFT_MIN:
+        // Stall while moving to soft min — likely hit physical limit.
+        // Accept current position as soft min and complete homing.
+        m_pMotor->emergency_stop();
+        {
+            int32_t iActualPos = m_pEncoder->get_position();
+            // Adjust total range to reflect the actual reachable range
+            m_iTotalRange = m_iTotalRange - iActualPos + SOFT_LIMIT_OFFSET;
+            m_pEncoder->set_position(SOFT_LIMIT_OFFSET);
+        }
+        m_pZoom->set_total_range(m_iTotalRange);
+        m_bHomingDone = true;
+        m_pStall->reset();
+        {
+            int32_t iPos = m_pEncoder->get_position();
+            uint16_t iZoom = m_pZoom->get_nearest_zoom(iPos);
+#ifndef BUILD_TESTING
+            swo_printf("[WARN] Homing: stall at soft min phase, adjusted range=%ld, pos=%ld, zoom=%u\n",
+                       static_cast<long>(m_iTotalRange), static_cast<long>(iPos), iZoom);
+#endif
+            send_response(rsp_cmd::ZOOM, iZoom);
+            send_response(rsp_cmd::HOMING_DONE, rsp::HOMING_DONE_PARAM);
+            send_save(save_reason::ARRIVED);
+        }
+        m_eTaskState = TASK_STATE_E::IDLE;
+        m_pSm->transition_to(SYSTEM_STATE_E::READY);
+        break;
+    case TASK_STATE_E::HOMING_RETRACT:
+        // Stall during retract — unusual but recoverable, skip retract
+        m_pMotor->emergency_stop();
+        m_pStall->reset();
+        m_iZOffset = m_pEncoder->get_z_position();
+        m_eTaskState = TASK_STATE_E::HOMING_FORWARD;
+        m_pStall->set_direction(StallDetect::Direction::FORWARD);
+        m_pStall->start_motor();
+        m_pMotor->move_to(HOMING_FAR_DISTANCE);
+#ifndef BUILD_TESTING
+        swo_printf("[WARN] Homing: stall during retract, proceeding to forward scan\n");
 #endif
         break;
     default:
@@ -215,7 +307,7 @@ void MotorTask::handle_stall() {
         m_pStall->reset();
         m_eTaskState = TASK_STATE_E::IDLE;
         m_pSm->transition_to(SYSTEM_STATE_E::READY);
-        send_response(cmd::FORCE_STOP, rsp::STALL_ALARM);
+        send_response(rsp_cmd::STALL_STOP, 0);
         send_save(save_reason::STALL);
 #ifndef BUILD_TESTING
         swo_printf("[FAIL] Unexpected stall during operation\n");
@@ -231,7 +323,6 @@ void MotorTask::handle_power_down() {
     m_pStall->reset();
     m_eTaskState = TASK_STATE_E::IDLE;
     m_pSm->transition_to(SYSTEM_STATE_E::READY);
-    send_response(cmd::FORCE_STOP, rsp::POWER_DOWN);
 #ifndef BUILD_TESTING
     swo_printf("[WARN] Power down detected, emergency save position=%ld\n",
                static_cast<long>(m_pEncoder->get_position()));
@@ -241,7 +332,9 @@ void MotorTask::handle_power_down() {
 void MotorTask::handle_overcurrent() {
     // During homing, overcurrent at physical limit is expected — treat as stall
     if (m_eTaskState == TASK_STATE_E::HOMING_REVERSE ||
-        m_eTaskState == TASK_STATE_E::HOMING_FORWARD) {
+        m_eTaskState == TASK_STATE_E::HOMING_FORWARD ||
+        m_eTaskState == TASK_STATE_E::HOMING_RETRACT ||
+        m_eTaskState == TASK_STATE_E::HOMING_TO_SOFT_MIN) {
         handle_stall();
         return;
     }
@@ -250,12 +343,13 @@ void MotorTask::handle_overcurrent() {
     m_pStall->reset();
     m_eTaskState = TASK_STATE_E::IDLE;
     m_pSm->transition_to(SYSTEM_STATE_E::READY);
-    send_response(cmd::FORCE_STOP, rsp::OVERCURRENT);
+    send_response(rsp_cmd::OVERCURRENT, 0);
     send_save(save_reason::STALL);
 #ifndef BUILD_TESTING
-    uint16_t iAdcCurrent = m_pAdcCurrent ? *m_pAdcCurrent : 0;
-    swo_printf("[FAIL] Overcurrent detected, ADC=%u (threshold=%u), emergency stop\n",
-               iAdcCurrent, StallDetect::OVERCURRENT_THRESHOLD);
+    uint16_t iAdcRaw = m_pAdcCurrent ? *m_pAdcCurrent : 0;
+    uint16_t iAdcFilt = m_AdcCurrentFilter.get_filtered();
+    swo_printf("[FAIL] Overcurrent detected, raw=%u filt=%u (threshold=%u), emergency stop\n",
+               iAdcRaw, iAdcFilt, StallDetect::OVERCURRENT_THRESHOLD);
 #endif
 }
 
@@ -344,9 +438,13 @@ void MotorTask::send_save(uint8_t reason) {
 }
 
 int32_t MotorTask::clamp_to_soft_limits(int32_t iTarget) const {
-    if (!m_bHomingDone || m_iTotalRange == 0) return iTarget;
+    // After homing: use discovered range; before homing: fallback to
+    // ZoomTable's range (restored from FRAM by StorageTask at boot)
+    int32_t iTotalRange = m_bHomingDone ? m_iTotalRange
+                                        : m_pZoom->get_total_range();
+    if (iTotalRange == 0) return iTarget;
     int32_t iMin = SOFT_LIMIT_OFFSET;
-    int32_t iMax = m_iTotalRange - SOFT_LIMIT_OFFSET;
+    int32_t iMax = iTotalRange - SOFT_LIMIT_OFFSET;
     if (iTarget < iMin) return iMin;
     if (iTarget > iMax) return iMax;
     return iTarget;
@@ -364,9 +462,22 @@ extern "C" void motor_task_entry(void* params) {
               &g_FramStorage, &g_SystemManager, g_cmdQueue, g_rspQueue,
               g_saveQueue, const_cast<uint16_t*>(&g_aAdcDmaBuf[0]));
 
+    swo_printf("[MOTOR] Task started\n");
+
     TickType_t xLastWake = xTaskGetTickCount();
+    uint32_t iHeartbeat = 0;
     for (;;) {
         task.run_once();
+
+        // Heartbeat every 5s
+        if (++iHeartbeat >= 5000) {
+            iHeartbeat = 0;
+            swo_printf("[MOTOR] HB state=%d motor=%d pos=%ld\n",
+                       (int)task.get_state(),
+                       (int)g_Motor.get_state(),
+                       static_cast<long>(g_Encoder.get_position()));
+        }
+
         vTaskDelayUntil(&xLastWake, pdMS_TO_TICKS(1));
     }
 #else

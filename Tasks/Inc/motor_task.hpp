@@ -35,8 +35,8 @@ public:
     int32_t get_total_range() const { return m_iTotalRange; }
     int32_t get_z_offset() const { return m_iZOffset; }
 
-    static constexpr int32_t SOFT_LIMIT_OFFSET = 200;
-    static constexpr int32_t HOMING_RETRACT_DISTANCE = 4096;
+    static constexpr int32_t SOFT_LIMIT_OFFSET = 800;
+    static constexpr int32_t HOMING_RETRACT_DISTANCE = 8000;
     static constexpr int32_t HOMING_FAR_DISTANCE = 1000000;
 
 private:

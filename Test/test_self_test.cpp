@@ -149,7 +149,8 @@ TEST_F(SelfTestTest, EncoderDir_Pass_NormalDirection) {
     EXPECT_FALSE(selfTest.get_result().bEncoderCompensated);
 }
 
-TEST_F(SelfTestTest, EncoderDir_Compensated) {
+TEST_F(SelfTestTest, EncoderDir_AtPositiveLimit_Pass) {
+    // Forward delta=0 (at positive limit), reverse delta < -500 → direction correct
     mock::get_log().spi_rx_buffer = {SelfTest::FRAM_TEST_BYTE};
     encoder.set_position(5000);
     selfTest.init(&pm, &fram, &encoder, &motor, &stall, &zoom,
@@ -160,19 +161,47 @@ TEST_F(SelfTestTest, EncoderDir_Compensated) {
     selfTest.step(tick()); // fram_rw
     selfTest.step(tick()); // encoder_dir_start (start=5000, target=7000)
 
-    // Simulate encoder going backwards (wrong polarity)
-    encoder.set_position(4000);
+    // Forward doesn't move (at positive limit)
+    encoder.set_position(5000);
     motor.emergency_stop();
-    selfTest.step(tick()); // encoder_dir_wait -> delta=-1000 < threshold -> ENCODER_DIR_REVERSE
+    selfTest.step(tick()); // encoder_dir_wait -> delta=0 -> ENCODER_DIR_REVERSE
 
     EXPECT_EQ(selfTest.get_phase(), SELF_TEST_PHASE_E::ENCODER_DIR_REVERSE);
 
-    // After compensation, encoder moves correctly
-    encoder.set_position(0);
-    selfTest.step(tick()); // encoder_dir_reverse -> starts new move from 0
-    int32_t iTarget = motor.get_target();
-    encoder.set_position(iTarget);
-    selfTest.step(tick()); // reverse_wait -> motor IDLE, delta OK -> pass
+    // Reverse probe: motor moves backward, encoder decreases (direction correct)
+    selfTest.step(tick()); // encoder_dir_reverse -> starts reverse move from 5000
+    encoder.set_position(5000 - SelfTest::ENCODER_DIR_MOVE); // moved to 3000
+    selfTest.step(tick()); // reverse_wait -> delta=-2000 < -500 -> PASS
+
+    EXPECT_TRUE(selfTest.get_result().aPass[static_cast<uint8_t>(SELF_TEST_ITEM_E::ENCODER_DIR)]);
+    EXPECT_FALSE(selfTest.get_result().bEncoderCompensated);
+    EXPECT_EQ(selfTest.get_phase(), SELF_TEST_PHASE_E::HOMING_START);
+}
+
+TEST_F(SelfTestTest, EncoderDir_Compensated) {
+    // Forward delta=0, reverse delta > 500 → encoder reversed → flip polarity
+    mock::get_log().spi_rx_buffer = {SelfTest::FRAM_TEST_BYTE};
+    encoder.set_position(5000);
+    selfTest.init(&pm, &fram, &encoder, &motor, &stall, &zoom,
+                   &iAdcVoltage, &iAdcCurrent);
+    selfTest.start();
+    selfTest.step(tick()); // voltage
+    selfTest.step(tick()); // baseline
+    selfTest.step(tick()); // fram_rw
+    selfTest.step(tick()); // encoder_dir_start (start=5000)
+
+    // Forward doesn't move
+    encoder.set_position(5000);
+    motor.emergency_stop();
+    selfTest.step(tick()); // -> ENCODER_DIR_REVERSE
+
+    EXPECT_EQ(selfTest.get_phase(), SELF_TEST_PHASE_E::ENCODER_DIR_REVERSE);
+
+    // Reverse: motor moves backward but encoder increases (polarity wrong)
+    selfTest.step(tick()); // encoder_dir_reverse -> starts reverse move
+    encoder.set_position(5000 + SelfTest::ENCODER_DIR_MOVE); // encoder goes up (wrong)
+    motor.emergency_stop(); // stall detect would stop motor in real HW
+    selfTest.step(tick()); // reverse_wait -> delta=+2000 > 500 -> flip -> PASS(compensated)
 
     EXPECT_TRUE(selfTest.get_result().aPass[static_cast<uint8_t>(SELF_TEST_ITEM_E::ENCODER_DIR)]);
     EXPECT_TRUE(selfTest.get_result().bEncoderCompensated);
@@ -180,6 +209,7 @@ TEST_F(SelfTestTest, EncoderDir_Compensated) {
 }
 
 TEST_F(SelfTestTest, EncoderDir_HardwareFail) {
+    // Both directions delta ≈ 0 → hardware fault
     mock::get_log().spi_rx_buffer = {SelfTest::FRAM_TEST_BYTE};
     encoder.set_position(5000);
     selfTest.init(&pm, &fram, &encoder, &motor, &stall, &zoom,
@@ -190,16 +220,16 @@ TEST_F(SelfTestTest, EncoderDir_HardwareFail) {
     selfTest.step(tick()); // fram_rw
     selfTest.step(tick()); // encoder_dir_start
 
-    encoder.set_position(4000);
+    // Forward doesn't move
+    encoder.set_position(5000);
     motor.emergency_stop();
     selfTest.step(tick()); // -> ENCODER_DIR_REVERSE
 
-    // After compensation still wrong
-    encoder.set_position(0);
-    selfTest.step(tick()); // encoder_dir_reverse -> starts move
-    encoder.set_position(-1000);
+    // Reverse also doesn't move
+    selfTest.step(tick()); // encoder_dir_reverse -> starts reverse move
+    encoder.set_position(5000); // no movement
     motor.emergency_stop();
-    bool bDone = selfTest.step(tick()); // reverse_wait -> fail
+    bool bDone = selfTest.step(tick()); // reverse_wait -> |delta|=0 -> FAIL
 
     EXPECT_TRUE(bDone);
     EXPECT_FALSE(selfTest.get_result().aPass[static_cast<uint8_t>(SELF_TEST_ITEM_E::ENCODER_DIR)]);

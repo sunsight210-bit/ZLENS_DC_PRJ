@@ -53,6 +53,7 @@ private:
     bool m_bBootDecided = false;
     bool m_bNormalBoot = false;
     bool m_bNormalBootStarted = false;
+    bool m_bSelfTestActive = false;
 
     void feed_watchdog();
     void check_voltage();

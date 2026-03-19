@@ -60,6 +60,7 @@ public:
     static constexpr int32_t  ENCODER_DIR_MOVE = 2000;
     static constexpr int32_t  ENCODER_DIR_THRESHOLD = 500;
     static constexpr uint32_t HOMING_TIMEOUT_MS = 60000;
+    static constexpr uint32_t ENCODER_DIR_TIMEOUT_MS = 3000;
     static constexpr int32_t  MIN_VALID_RANGE = 10000;
     static constexpr uint16_t FRAM_TEST_ADDR = 0x00FE;
     static constexpr uint8_t  FRAM_TEST_BYTE = 0xA5;
@@ -74,6 +75,7 @@ public:
     void notify_homing_done(bool bSuccess, int32_t iTotalRange);
 
     SELF_TEST_PHASE_E get_phase() const { return m_ePhase; }
+    bool is_motor_idle() const { return m_pMotor->get_state() == MOTOR_STATE_E::IDLE; }
 
 private:
     PowerMonitor* m_pPm = nullptr;
@@ -89,6 +91,7 @@ private:
     SELF_TEST_RESULT_S m_stResult{};
 
     int32_t m_iEncoderStartPos = 0;
+    uint32_t m_iEncoderDirStartTick = 0;
     uint32_t m_iHomingStartTick = 0;
     bool m_bHomingNotified = false;
     bool m_bHomingSuccess = false;
@@ -97,6 +100,7 @@ private:
 
     void set_item_pass(SELF_TEST_ITEM_E eItem, bool bPass);
     void finalize();
+    void print_report();
 };
 
 } // namespace zlens

@@ -75,22 +75,19 @@ void MonitorTask::run_once() {
                     xQueueSend(g_cmdQueue, &stCmd, 0);
                 }
 
-                // Check response queue for homing result
+                // Check if homing completed by polling ZoomTable
+                // (response queue is unreliable — CommTask may consume it first)
                 if (m_SelfTest.get_phase() == SELF_TEST_PHASE_E::HOMING_WAIT) {
-                    RSP_MESSAGE_S stRsp;
-                    if (xQueueReceive(g_rspQueue, &stRsp, 0) == pdTRUE) {
-                        if (stRsp.cmd == cmd::HOMING) {
-                            bool bOk = (stRsp.param == rsp::OK);
-                            // Get total range from zoom table (MotorTask sets it during homing)
-                            int32_t iRange = m_pZoom->get_total_range();
-                            m_SelfTest.notify_homing_done(bOk, iRange);
-                        }
+                    int32_t iRange = m_pZoom->get_total_range();
+                    if (iRange > 0) {
+                        m_SelfTest.notify_homing_done(true, iRange);
                     }
                 }
 
                 bool bDone = m_SelfTest.step(HAL_GetTick());
                 if (bDone) {
                     m_bSelfTestDone = true;
+                    m_bSelfTestActive = false;
                     m_bSelfTestPassed = m_SelfTest.get_result().bAllPassed;
                     if (m_bSelfTestPassed) {
 #ifndef BUILD_TESTING
@@ -119,12 +116,18 @@ void MonitorTask::run_once() {
         check_voltage();
         if (g_bUartSelfTestReq) {
             g_bUartSelfTestReq = false;
-            // Reset self-test state for re-run
+            // Reset self-test state for re-run, force full self-test
             m_bSelfTestDone = false;
             m_bSelfTestPassed = false;
-            m_bBootDecided = false;
+            m_bBootDecided = true;
             m_bNormalBoot = false;
             m_bNormalBootStarted = false;
+            m_bSelfTestActive = true;
+            m_pZoom->set_total_range(0);
+            m_pSm->transition_to(SYSTEM_STATE_E::SELF_TEST);
+        }
+        // Re-assert SELF_TEST if MotorTask overrode to READY while self-test active
+        if (m_bSelfTestActive && !m_bSelfTestDone) {
             m_pSm->transition_to(SYSTEM_STATE_E::SELF_TEST);
         }
         break;

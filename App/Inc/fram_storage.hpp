@@ -33,7 +33,8 @@ struct FRAM_PARAMS_S {
     int16_t  encoder_overflow;
     uint8_t  last_save_reason;
     uint8_t  encoder_compensated;
-    uint8_t  reserved[13];
+    uint16_t motor_speed_khz;
+    uint8_t  reserved[11];
     uint16_t crc16;
 };
 #pragma pack(pop)

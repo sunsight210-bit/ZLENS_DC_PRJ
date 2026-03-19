@@ -94,7 +94,9 @@ void MotorCtrl::update() {
         } else {
             m_eState = MOTOR_STATE_E::CONSTANT;
         }
-        if (remaining < DECEL_DISTANCE) {
+        // Only decelerate if we've actually accelerated above min speed,
+        // otherwise short moves (distance < DECEL_DISTANCE) get stuck at min speed
+        if (remaining < DECEL_DISTANCE && m_iCurrentSpeed > m_iMinSpeed + ACCEL_STEP) {
             m_eState = MOTOR_STATE_E::DECELERATING;
         }
         break;
