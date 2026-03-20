@@ -128,43 +128,89 @@ TEST_F(MotorTaskTest, SetZoom_Arrived_TwoFrames) {
 }
 
 // ============================================================
-// HOMING (0x01) — was 0x02
+// HOMING (0x01) — 4-stage fast/slow homing
 // ============================================================
 
 TEST_F(MotorTaskTest, Homing_CmdIs0x01) {
     send_cmd(cmd::HOMING, 0);
     task.run_once();
-    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_REVERSE);
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_FAST);
 }
 
-TEST_F(MotorTaskTest, HomingComplete_TwoFrames) {
+TEST_F(MotorTaskTest, HomingFast_StartsReverse) {
     task.start_homing();
-    trigger_stall(); // REVERSE -> RETRACT
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_FAST);
+}
 
+TEST_F(MotorTaskTest, HomingFast_StallTriggersRetract) {
+    task.start_homing();
+    trigger_stall();
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_RETRACT);
+    EXPECT_EQ(motor.get_target(), MotorTask::HOMING_RETRACT_DISTANCE);
+}
+
+TEST_F(MotorTaskTest, HomingRetract_DoneTriggersSlow) {
+    task.start_homing();
+    trigger_stall(); // FAST → RETRACT
     encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
     iAdcCurrent = 0;
     for (int i = 0; i < 10; ++i) task.run_once();
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_SLOW);
+}
 
-    encoder.set_position(50000);
-    trigger_stall(); // FORWARD -> TO_SOFT_MIN
-
-    encoder.set_position(MotorTask::SOFT_LIMIT_OFFSET);
+TEST_F(MotorTaskTest, HomingSlow_StallTriggersSettle) {
+    task.start_homing();
+    trigger_stall(); // FAST → RETRACT
+    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
     iAdcCurrent = 0;
     for (int i = 0; i < 10; ++i) task.run_once();
+    // Now in SLOW
+    trigger_stall(); // SLOW → SETTLE
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_SETTLE);
+    EXPECT_EQ(motor.get_target(), MotorTask::HOMING_SETTLE_DISTANCE);
+}
 
+TEST_F(MotorTaskTest, HomingSettle_Complete) {
+    task.start_homing();
+    trigger_stall(); // FAST → RETRACT
+    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 10; ++i) task.run_once();
+    trigger_stall(); // SLOW → SETTLE
+    encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 10; ++i) task.run_once();
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
     EXPECT_TRUE(task.is_homing_done());
-
-    // Should send: ZOOM(current) + HOMING_DONE(0x000F)
     auto rsps = drain_rsp();
     ASSERT_GE(rsps.size(), 2u);
     EXPECT_EQ(rsps[0].cmd, rsp_cmd::ZOOM);
     EXPECT_EQ(rsps[1].cmd, rsp_cmd::HOMING_DONE);
-    EXPECT_EQ(rsps[1].param, rsp::HOMING_DONE_PARAM);
+}
+
+TEST_F(MotorTaskTest, Homing_BacklashDisabled) {
+    motor.set_backlash(200);
+    motor.set_backlash_enabled(true);
+    task.start_homing();
+    EXPECT_FALSE(motor.is_backlash_enabled());
+}
+
+TEST_F(MotorTaskTest, Homing_BacklashReenabledAfter) {
+    motor.set_backlash(200);
+    task.start_homing();
+    trigger_stall();
+    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 10; ++i) task.run_once();
+    trigger_stall();
+    encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 10; ++i) task.run_once();
+    EXPECT_TRUE(motor.is_backlash_enabled());
 }
 
 // ============================================================
-// FORCE_STOP (0x02) — was 0x03
+// FORCE_STOP (0x02)
 // ============================================================
 
 TEST_F(MotorTaskTest, ForceStop_CmdIs0x02) {
@@ -220,12 +266,11 @@ TEST_F(MotorTaskTest, OvercurrentDetected_Response0xE2) {
 }
 
 // ============================================================
-// ZOOM_INC (0x11) — new relative zoom increment
+// ZOOM_INC (0x11)
 // ============================================================
 
 TEST_F(MotorTaskTest, ZoomInc_RelativeIncrease) {
 
-    // Set current position at zoom 10 (1.0x)
     int32_t iPos10 = zoom.get_position(10);
     encoder.set_position(iPos10);
 
@@ -237,23 +282,20 @@ TEST_F(MotorTaskTest, ZoomInc_RelativeIncrease) {
 
 TEST_F(MotorTaskTest, ZoomInc_ClampToMax) {
 
-    // Set position at a mid zoom, increment beyond max
-    int32_t iPos50 = zoom.get_position(50); // 5.0x
+    int32_t iPos50 = zoom.get_position(50);
     encoder.set_position(iPos50);
 
     uint16_t iMaxZoom = zoom.get_max_zoom();
-    // Increment that would exceed max → clamp
-    send_cmd(cmd::ZOOM_INC, iMaxZoom); // +max → should clamp to max
+    send_cmd(cmd::ZOOM_INC, iMaxZoom);
     task.run_once();
 
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::MOVING);
-    // Target should be at max zoom position
     int32_t iPosMax = zoom.get_position(iMaxZoom);
     EXPECT_EQ(motor.get_target(), iPosMax);
 }
 
 // ============================================================
-// ZOOM_DEC (0x12) — new relative zoom decrement
+// ZOOM_DEC (0x12)
 // ============================================================
 
 TEST_F(MotorTaskTest, ZoomDec_RelativeDecrease) {
@@ -269,23 +311,21 @@ TEST_F(MotorTaskTest, ZoomDec_RelativeDecrease) {
 
 TEST_F(MotorTaskTest, ZoomDec_ClampToMin) {
 
-    // Set position at a mid zoom, decrement beyond min
-    int32_t iPos50 = zoom.get_position(50); // 5.0x
+    int32_t iPos50 = zoom.get_position(50);
     encoder.set_position(iPos50);
 
     uint16_t iMinZoom = zoom.get_min_zoom();
-    // Decrement more than current → clamp to min
-    send_cmd(cmd::ZOOM_DEC, 700); // -70x → should clamp to min
+    send_cmd(cmd::ZOOM_DEC, 700);
     task.run_once();
 
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::MOVING);
-    // Min zoom position (0) gets clamped to SOFT_LIMIT_OFFSET by soft limits
-    // (ZoomTable has total_range set, so soft limits are active even without homing)
-    EXPECT_EQ(motor.get_target(), MotorTask::SOFT_LIMIT_OFFSET);
+    // Min zoom position is 0 — no soft limits anymore
+    int32_t iPosMin = zoom.get_position(iMinZoom);
+    EXPECT_EQ(motor.get_target(), iPosMin);
 }
 
 // ============================================================
-// CYCLE_START (0x30) / CYCLE_STOP (0x31) — moved from 0x11/0x12
+// CYCLE_START (0x30) / CYCLE_STOP (0x31)
 // ============================================================
 
 TEST_F(MotorTaskTest, CycleStart_CmdIs0x30) {
@@ -307,78 +347,6 @@ TEST_F(MotorTaskTest, CycleStop_CmdIs0x31) {
     RSP_MESSAGE_S rsp;
     EXPECT_TRUE(receive_rsp(rsp));
     EXPECT_EQ(rsp.cmd, cmd::CYCLE_STOP);
-}
-
-// ============================================================
-// Homing sub-steps (unchanged logic, verifying with new cmd IDs)
-// ============================================================
-
-TEST_F(MotorTaskTest, HomingReverse_UntilStall) {
-    task.start_homing();
-    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_REVERSE);
-
-    trigger_stall();
-    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_RETRACT);
-}
-
-TEST_F(MotorTaskTest, HomingRetract_4096Counts) {
-    task.start_homing();
-    trigger_stall();
-
-    EXPECT_EQ(motor.get_target(), MotorTask::HOMING_RETRACT_DISTANCE);
-}
-
-TEST_F(MotorTaskTest, HomingFindZ_RecordsOffset) {
-    task.start_homing();
-    trigger_stall();
-
-    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
-    encoder.handle_z_pulse();
-    iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
-
-    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_FORWARD);
-    EXPECT_EQ(task.get_z_offset(), encoder.get_z_position());
-}
-
-TEST_F(MotorTaskTest, HomingForward_RecordsRange) {
-    task.start_homing();
-    trigger_stall();
-
-    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
-    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_FORWARD);
-
-    encoder.set_position(50000);
-    trigger_stall();
-
-    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_TO_SOFT_MIN);
-    EXPECT_EQ(task.get_total_range(), 50000);
-}
-
-// ============================================================
-// Soft limits
-// ============================================================
-
-TEST_F(MotorTaskTest, SoftLimit_ClampsTarget) {
-    task.start_homing();
-    trigger_stall();
-    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
-    encoder.set_position(50000);
-    trigger_stall();
-    encoder.set_position(MotorTask::SOFT_LIMIT_OFFSET);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
-    EXPECT_TRUE(task.is_homing_done());
-
-    send_cmd(cmd::SET_ZOOM, 700);
-    task.run_once();
-
-    int32_t iMax = 50000 - MotorTask::SOFT_LIMIT_OFFSET;
-    EXPECT_LE(motor.get_target(), iMax);
 }
 
 // ============================================================
@@ -415,8 +383,6 @@ TEST_F(MotorTaskTest, PowerDown_SetsSpiEmergency) {
 
     EXPECT_TRUE(g_bSpiEmergency);
 
-    // Power down no longer sends UART response (can't send in time)
-    // But rsp queue may still have a message for logging
     mock_rtos::set_notify_return(pdFALSE);
     g_bSpiEmergency = false;
 }

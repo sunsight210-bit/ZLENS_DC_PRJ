@@ -15,9 +15,9 @@ class MotorTask {
 public:
     enum class TASK_STATE_E {
         IDLE, MOVING,
-        HOMING_REVERSE, HOMING_RETRACT, HOMING_FIND_Z,
-        HOMING_FORWARD, HOMING_TO_SOFT_MIN,
-        CYCLING
+        HOMING_FAST, HOMING_RETRACT, HOMING_SLOW, HOMING_SETTLE,
+        CYCLING,
+        BACKLASH_MEASURE, ACCURACY_TEST  // for future Tasks 6/7
     };
 
     void init(MotorCtrl* pMotor, Encoder* pEncoder, StallDetect* pStall,
@@ -26,18 +26,18 @@ public:
               uint16_t* pAdcCurrent);
 
     void run_once();
-    void start_homing();
+    void start_homing(bool bFullDiag = false);
     bool is_homing_done() const { return m_bHomingDone; }
     void start_cycle(int8_t iStep, uint8_t iDwell_x100ms);
     void stop_cycle();
 
     TASK_STATE_E get_state() const { return m_eTaskState; }
-    int32_t get_total_range() const { return m_iTotalRange; }
-    int32_t get_z_offset() const { return m_iZOffset; }
 
-    static constexpr int32_t SOFT_LIMIT_OFFSET = 800;
-    static constexpr int32_t HOMING_RETRACT_DISTANCE = 8000;
+    static constexpr int32_t HOMING_RETRACT_DISTANCE = 4096;
+    static constexpr int32_t HOMING_SETTLE_DISTANCE = 800;
     static constexpr int32_t HOMING_FAR_DISTANCE = 1000000;
+    static constexpr uint16_t HOMING_FAST_SPEED = MotorCtrl::MAX_SPEED / 2;
+    static constexpr uint16_t HOMING_SLOW_SPEED = MotorCtrl::MIN_SPEED;
 
 private:
     MotorCtrl* m_pMotor = nullptr;
@@ -55,10 +55,7 @@ private:
 
     TASK_STATE_E m_eTaskState = TASK_STATE_E::IDLE;
     bool m_bHomingDone = false;
-
-    // Homing
-    int32_t m_iZOffset = 0;
-    int32_t m_iTotalRange = 0;
+    bool m_bFullDiagnostics = false;
 
     // Cycling
     int8_t m_iCycleStep = 1;
@@ -76,7 +73,6 @@ private:
     void handle_power_down();
     void send_response(uint8_t cmd, uint16_t param);
     void send_save(uint8_t reason);
-    int32_t clamp_to_soft_limits(int32_t iTarget) const;
 };
 
 } // namespace zlens
