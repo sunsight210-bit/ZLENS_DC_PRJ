@@ -34,7 +34,6 @@ void MotorCtrl::coast() {
 }
 
 void MotorCtrl::move_to(int32_t target) {
-    m_iTarget = target;
     int32_t pos = m_pEncoder->get_position();
     int32_t diff = target - pos;
 
@@ -43,7 +42,17 @@ void MotorCtrl::move_to(int32_t target) {
         return;
     }
 
-    m_eDirection = (diff > 0) ? DIRECTION_E::FORWARD : DIRECTION_E::REVERSE;
+    if (m_bBacklashEnabled && diff < 0) {
+        // Reverse move: two-phase approach
+        m_iFinalTarget = target;
+        int32_t iOvershoot = target - m_iBacklash - m_iBacklash / 2;
+        m_iTarget = iOvershoot;
+    } else {
+        m_iTarget = target;
+        m_iFinalTarget = target;
+    }
+
+    m_eDirection = (m_iTarget - pos > 0) ? DIRECTION_E::FORWARD : DIRECTION_E::REVERSE;
     m_iCurrentSpeed = m_iMinSpeed;
     m_eState = MOTOR_STATE_E::ACCELERATING;
     set_pwm(m_eDirection, m_iCurrentSpeed);
@@ -72,6 +81,16 @@ void MotorCtrl::set_current_limit(uint16_t milliamps) {
 void MotorCtrl::update() {
     if (m_eState == MOTOR_STATE_E::IDLE || m_eState == MOTOR_STATE_E::STALLED) return;
 
+    // Handle APPROACHING: start phase 2 (forward to final target)
+    if (m_eState == MOTOR_STATE_E::APPROACHING) {
+        m_iTarget = m_iFinalTarget;
+        m_eDirection = DIRECTION_E::FORWARD;
+        m_iCurrentSpeed = m_iMinSpeed;
+        m_eState = MOTOR_STATE_E::ACCELERATING;
+        set_pwm(m_eDirection, m_iCurrentSpeed);
+        return;
+    }
+
     int32_t pos = m_pEncoder->get_position();
     int32_t diff = m_iTarget - pos;
     int32_t remaining = std::abs(diff);
@@ -82,6 +101,11 @@ void MotorCtrl::update() {
     if (remaining <= DEADZONE || bOvershot) {
         brake();
         m_iCurrentSpeed = 0;
+        // Check if this was phase 1 of backlash compensation
+        if (m_bBacklashEnabled && m_iTarget != m_iFinalTarget) {
+            m_eState = MOTOR_STATE_E::APPROACHING;
+            return;
+        }
         m_eState = MOTOR_STATE_E::IDLE;
         return;
     }

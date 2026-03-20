@@ -11,7 +11,7 @@
 
 namespace zlens {
 
-enum class MOTOR_STATE_E { IDLE, ACCELERATING, CONSTANT, DECELERATING, BRAKING, STALLED };
+enum class MOTOR_STATE_E { IDLE, ACCELERATING, CONSTANT, DECELERATING, BRAKING, STALLED, APPROACHING };
 enum class DIRECTION_E { FORWARD, REVERSE };
 
 class MotorCtrl {
@@ -37,6 +37,11 @@ public:
 
     void set_max_speed(uint16_t speed) { m_iMaxSpeed = speed; }
     void set_min_speed(uint16_t speed) { m_iMinSpeed = speed; }
+    void set_speed_limit(uint16_t iLimit) { m_iMaxSpeed = iLimit; }
+    void set_backlash(int16_t iCounts) { m_iBacklash = iCounts; }
+    void set_backlash_enabled(bool bEnabled) { m_bBacklashEnabled = bEnabled; }
+    int16_t get_backlash() const { return m_iBacklash; }
+    bool is_backlash_enabled() const { return m_bBacklashEnabled; }
 
 private:
     TIM_HandleTypeDef* m_pHtim = nullptr;
@@ -49,6 +54,10 @@ private:
     uint16_t m_iCurrentSpeed = 0;
     uint16_t m_iMaxSpeed = MAX_SPEED;
     uint16_t m_iMinSpeed = MIN_SPEED;
+
+    int16_t m_iBacklash = 200;
+    bool m_bBacklashEnabled = false;
+    int32_t m_iFinalTarget = 0;
 
     void set_pwm(DIRECTION_E dir, uint16_t speed);
     void brake();
