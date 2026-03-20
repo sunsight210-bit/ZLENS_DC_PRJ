@@ -25,13 +25,11 @@ void MonitorTask::init(SystemManager* pSm, PowerMonitor* pPm,
     m_bBootDecided = false;
     m_bNormalBoot = false;
     m_bNormalBootStarted = false;
+    m_bNeedHomingOnly = false;
+    m_bHomingTriggered = false;
 
-    m_SelfTest.init(pPm, pFram, pEncoder, pMotor, pStall, pZoom,
+    m_SelfTest.init(pPm, pFram, pEncoder, pMotor, pStall,
                     pAdcVoltage, pAdcCurrent);
-}
-
-void MonitorTask::notify_homing_done(bool bSuccess, int32_t iTotalRange) {
-    m_SelfTest.notify_homing_done(bSuccess, iTotalRange);
 }
 
 void MonitorTask::run_once() {
@@ -42,16 +40,16 @@ void MonitorTask::run_once() {
         feed_watchdog();
 
         if (!m_bBootDecided) {
-            // Decide: normal boot or first-time self-test?
+            // Decide boot path: normal / homing-only / full self-test
             FRAM_PARAMS_S stParams{};
             bool bValid = m_pFram->load_params(stParams);
             if (bValid && FramStorage::check_magic(stParams) &&
-                FramStorage::verify_crc(stParams) &&
-                stParams.position_valid == 0xFF &&
-                stParams.homing_done == 1) {
-                m_bNormalBoot = true;
-            } else {
-                m_bNormalBoot = false;
+                FramStorage::verify_crc(stParams) && stParams.version == 2) {
+                if (stParams.position_valid == 0xFF && stParams.homing_done == 1) {
+                    m_bNormalBoot = true;
+                } else if (stParams.homing_done == 1) {
+                    m_bNeedHomingOnly = true;
+                }
             }
             m_bBootDecided = true;
         }
@@ -62,24 +60,22 @@ void MonitorTask::run_once() {
             } else {
                 run_normal_boot();
             }
+        } else if (m_bNeedHomingOnly) {
+            if (!m_bHomingTriggered) {
+                m_bHomingTriggered = true;
+                CMD_MESSAGE_S stCmd = {cmd::HOMING, 0};
+                xQueueSend(g_cmdQueue, &stCmd, 0);
+                m_pSm->transition_to(SYSTEM_STATE_E::HOMING);
+            }
+            // MonitorTask will transition to READY when MotorTask completes homing
+            // (MotorTask sets SYSTEM_STATE_E::READY on homing complete)
+            m_bSelfTestDone = true;
+            m_bSelfTestPassed = true;
         } else {
             // First-time: full self-test
             if (!m_bSelfTestDone) {
                 if (m_SelfTest.get_phase() == SELF_TEST_PHASE_E::IDLE) {
                     m_SelfTest.start();
-                }
-
-                // When SelfTest reaches HOMING_START, send HOMING command
-                if (m_SelfTest.get_phase() == SELF_TEST_PHASE_E::HOMING_START) {
-                    CMD_MESSAGE_S stCmd = {cmd::HOMING, 0};
-                    xQueueSend(g_cmdQueue, &stCmd, 0);
-                }
-
-                // Check if homing completed by polling ZoomTable
-                // (response queue is unreliable — CommTask may consume it first)
-                if (m_SelfTest.get_phase() == SELF_TEST_PHASE_E::HOMING_WAIT) {
-                    // TOTAL_RANGE is now a fixed constant, homing is notified externally
-                    m_SelfTest.notify_homing_done(true, ZoomTable::TOTAL_RANGE);
                 }
 
                 bool bDone = m_SelfTest.step(HAL_GetTick());
@@ -88,10 +84,10 @@ void MonitorTask::run_once() {
                     m_bSelfTestActive = false;
                     m_bSelfTestPassed = m_SelfTest.get_result().bAllPassed;
                     if (m_bSelfTestPassed) {
-#ifndef BUILD_TESTING
-                        swo_printf("[PASS] Self-test passed (first boot)\n");
-#endif
-                        m_pSm->transition_to(SYSTEM_STATE_E::READY);
+                        // Trigger homing after successful self-test
+                        CMD_MESSAGE_S stCmd = {cmd::HOMING, 0};
+                        xQueueSend(g_cmdQueue, &stCmd, 0);
+                        m_pSm->transition_to(SYSTEM_STATE_E::HOMING);
                     } else {
 #ifndef BUILD_TESTING
                         swo_printf("[FAIL] Self-test failed\n");
@@ -120,6 +116,8 @@ void MonitorTask::run_once() {
             m_bBootDecided = true;
             m_bNormalBoot = false;
             m_bNormalBootStarted = false;
+            m_bNeedHomingOnly = false;
+            m_bHomingTriggered = false;
             m_bSelfTestActive = true;
             m_pSm->transition_to(SYSTEM_STATE_E::SELF_TEST);
         }

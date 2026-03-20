@@ -32,9 +32,6 @@ public:
     bool is_self_test_passed() const { return m_bSelfTestPassed; }
     bool is_normal_boot() const { return m_bNormalBoot; }
 
-    // Called by MotorTask (via response queue) when homing completes
-    void notify_homing_done(bool bSuccess, int32_t iTotalRange);
-
     SelfTest& get_self_test() { return m_SelfTest; }
 
 private:
@@ -54,6 +51,8 @@ private:
     bool m_bNormalBoot = false;
     bool m_bNormalBootStarted = false;
     bool m_bSelfTestActive = false;
+    bool m_bNeedHomingOnly = false;
+    bool m_bHomingTriggered = false;
 
     void feed_watchdog();
     void check_voltage();

@@ -54,17 +54,31 @@ protected:
                   &iAdcCurrent, &encoder, &motor, &stall, &zoom);
     }
 
-    // Helper: prepare FRAM with valid params to simulate normal boot
+    // Helper: prepare FRAM with valid params (version 2) for normal boot
     void prepare_valid_fram() {
         FRAM_PARAMS_S p{};
         p.magic_number = FramStorage::MAGIC;
-        p.version = 1;
+        p.version = 2;
         p.current_position = 50000;
         p.current_zoom_x10 = 40; // 4.0x
         p.homing_done = 1;
         p.position_valid = 0xFF;
         p.crc16 = FramStorage::calc_crc(p);
         // Set SPI rx buffer so load_params returns valid data
+        const uint8_t* pBytes = reinterpret_cast<const uint8_t*>(&p);
+        mock::get_log().spi_rx_buffer.assign(pBytes, pBytes + sizeof(p));
+    }
+
+    // Helper: prepare FRAM with homing_done=1 but position_valid=0 (homing-only boot)
+    void prepare_homing_only_fram() {
+        FRAM_PARAMS_S p{};
+        p.magic_number = FramStorage::MAGIC;
+        p.version = 2;
+        p.current_position = 50000;
+        p.current_zoom_x10 = 40;
+        p.homing_done = 1;
+        p.position_valid = 0;  // abnormal power loss
+        p.crc16 = FramStorage::calc_crc(p);
         const uint8_t* pBytes = reinterpret_cast<const uint8_t*>(&p);
         mock::get_log().spi_rx_buffer.assign(pBytes, pBytes + sizeof(p));
     }
@@ -97,7 +111,7 @@ TEST_F(MonitorTaskTest, NormalBoot_SkipsSelfTest) {
 
     sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
 
-    task.run_once(); // boot decision: FRAM valid -> normal boot -> READY
+    task.run_once(); // boot decision: FRAM valid v2 -> normal boot -> READY
 
     EXPECT_TRUE(task.is_normal_boot());
     EXPECT_TRUE(task.is_self_test_done());
@@ -152,6 +166,70 @@ TEST_F(MonitorTaskTest, NormalBoot_NoMoveWhenCloseToZoom) {
     if (bGotCmd) {
         EXPECT_NE(stCmd.cmd, cmd::SET_ZOOM);
     }
+}
+
+TEST_F(MonitorTaskTest, HomingOnlyBoot_SendsHomingCommand) {
+    prepare_homing_only_fram();
+    encoder.set_position(50000);
+
+    sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
+
+    task.run_once(); // boot decision: homing_done=1, position_valid=0 -> homing-only
+
+    // Should have sent HOMING command
+    CMD_MESSAGE_S stCmd;
+    bool bGotCmd = xQueueReceive(g_cmdQueue, &stCmd, 0) == pdTRUE;
+    EXPECT_TRUE(bGotCmd);
+    if (bGotCmd) {
+        EXPECT_EQ(stCmd.cmd, cmd::HOMING);
+    }
+    // Should transition to HOMING state
+    EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::HOMING);
+    // Self-test is considered done/passed (skipped)
+    EXPECT_TRUE(task.is_self_test_done());
+    EXPECT_TRUE(task.is_self_test_passed());
+}
+
+TEST_F(MonitorTaskTest, HomingOnlyBoot_NotNormalBoot) {
+    prepare_homing_only_fram();
+    encoder.set_position(50000);
+
+    sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
+    task.run_once();
+
+    EXPECT_FALSE(task.is_normal_boot());
+}
+
+TEST_F(MonitorTaskTest, FirstBoot_SelfTestPass_SendsHomingCommand) {
+    sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
+    iAdcVoltage = 2017;
+    iAdcCurrent = 0;
+    // Boot decision calls load_params which reads primary (60 bytes) + backup (60 bytes),
+    // then test_rw writes+reads 1 byte. Prepend 120 dummy bytes.
+    std::vector<uint8_t> rx_data(2 * sizeof(FRAM_PARAMS_S), 0x00);
+    rx_data.push_back(SelfTest::FRAM_TEST_BYTE);
+    mock::get_log().spi_rx_buffer = rx_data;
+
+    // Run through full self-test: VOLTAGE, BASELINE, FRAM_RW, ENCODER_DIR
+    task.run_once(); // boot decision + start + VOLTAGE
+    task.run_once(); // BASELINE
+    task.run_once(); // FRAM_RW
+    task.run_once(); // ENCODER_DIR_START
+
+    encoder.set_position(SelfTest::ENCODER_DIR_MOVE);
+    task.run_once(); // ENCODER_DIR_WAIT -> DONE (all pass)
+
+    // Self-test passed, should send HOMING command
+    EXPECT_TRUE(task.is_self_test_done());
+    EXPECT_TRUE(task.is_self_test_passed());
+
+    CMD_MESSAGE_S stCmd;
+    bool bGotCmd = xQueueReceive(g_cmdQueue, &stCmd, 0) == pdTRUE;
+    EXPECT_TRUE(bGotCmd);
+    if (bGotCmd) {
+        EXPECT_EQ(stCmd.cmd, cmd::HOMING);
+    }
+    EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::HOMING);
 }
 
 TEST_F(MonitorTaskTest, UartSelfTestReq_TriggersRetest) {
@@ -218,4 +296,24 @@ TEST_F(MonitorTaskTest, BusyState_NormalRun) {
 
     EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::BUSY);
     EXPECT_GT(mock::get_log().iwdg_refresh_count, 0u);
+}
+
+TEST_F(MonitorTaskTest, OldVersion1Fram_TriggersFullSelfTest) {
+    // FRAM with version=1 should NOT be treated as normal or homing-only boot
+    FRAM_PARAMS_S p{};
+    p.magic_number = FramStorage::MAGIC;
+    p.version = 1;  // old version
+    p.current_position = 50000;
+    p.homing_done = 1;
+    p.position_valid = 0xFF;
+    p.crc16 = FramStorage::calc_crc(p);
+    const uint8_t* pBytes = reinterpret_cast<const uint8_t*>(&p);
+    mock::get_log().spi_rx_buffer.assign(pBytes, pBytes + sizeof(p));
+
+    sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
+    task.run_once();
+
+    EXPECT_FALSE(task.is_normal_boot());
+    // Should start full self-test (not done yet after one run)
+    EXPECT_FALSE(task.is_self_test_done());
 }

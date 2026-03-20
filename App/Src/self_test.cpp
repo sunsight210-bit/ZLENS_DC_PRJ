@@ -1,19 +1,19 @@
 // App/Src/self_test.cpp
 #include "self_test.hpp"
 #include "swo_debug.hpp"
+#include "zoom_table.hpp"
 #include <cstring>
 
 namespace zlens {
 
 void SelfTest::init(PowerMonitor* pPm, FramStorage* pFram, Encoder* pEncoder,
-                    MotorCtrl* pMotor, StallDetect* pStall, ZoomTable* pZoom,
+                    MotorCtrl* pMotor, StallDetect* pStall,
                     uint16_t* pAdcVoltage, uint16_t* pAdcCurrent) {
     m_pPm = pPm;
     m_pFram = pFram;
     m_pEncoder = pEncoder;
     m_pMotor = pMotor;
     m_pStall = pStall;
-    m_pZoom = pZoom;
     m_pAdcVoltage = pAdcVoltage;
     m_pAdcCurrent = pAdcCurrent;
     m_ePhase = SELF_TEST_PHASE_E::IDLE;
@@ -24,21 +24,12 @@ void SelfTest::start() {
     m_pMotor->emergency_stop();
     m_pStall->reset();
     std::memset(&m_stResult, 0, sizeof(m_stResult));
-    m_bHomingNotified = false;
-    m_bHomingSuccess = false;
-    m_iHomingTotalRange = 0;
     m_bEncoderReversed = false;
     m_ePhase = SELF_TEST_PHASE_E::VOLTAGE;
 }
 
 void SelfTest::set_item_pass(SELF_TEST_ITEM_E eItem, bool bPass) {
     m_stResult.aPass[static_cast<uint8_t>(eItem)] = bPass;
-}
-
-void SelfTest::notify_homing_done(bool bSuccess, int32_t iTotalRange) {
-    m_bHomingNotified = true;
-    m_bHomingSuccess = bSuccess;
-    m_iHomingTotalRange = iTotalRange;
 }
 
 bool SelfTest::step(uint32_t iTick) {
@@ -94,7 +85,9 @@ bool SelfTest::step(uint32_t iTick) {
             // Direction correct, not at positive limit
             set_item_pass(SELF_TEST_ITEM_E::ENCODER_DIR, true);
             m_pStall->reset();
-            m_ePhase = SELF_TEST_PHASE_E::HOMING_START;
+            m_ePhase = SELF_TEST_PHASE_E::DONE;
+            finalize();
+            return true;
         } else {
             // Forward motion insufficient — try reverse to distinguish
             // positive-limit vs encoder-reversed vs hardware-fail
@@ -122,16 +115,16 @@ bool SelfTest::step(uint32_t iTick) {
         }
         int32_t iDelta = m_pEncoder->get_position() - m_iEncoderStartPos;
         if (iDelta < -ENCODER_DIR_THRESHOLD) {
-            // Reverse moved, encoder decreased → direction correct, at positive limit
+            // Reverse moved, encoder decreased -> direction correct, at positive limit
             set_item_pass(SELF_TEST_ITEM_E::ENCODER_DIR, true);
         } else if (iDelta > ENCODER_DIR_THRESHOLD) {
-            // Reverse moved but encoder increased → polarity reversed
+            // Reverse moved but encoder increased -> polarity reversed
             m_bEncoderReversed = true;
             TIM8->CCER ^= TIM_CCER_CC1P;
             set_item_pass(SELF_TEST_ITEM_E::ENCODER_DIR, true);
             m_stResult.bEncoderCompensated = true;
         } else {
-            // Neither direction produced movement → hardware fault
+            // Neither direction produced movement -> hardware fault
             set_item_pass(SELF_TEST_ITEM_E::ENCODER_DIR, false);
             m_pStall->reset();
             m_ePhase = SELF_TEST_PHASE_E::DONE;
@@ -139,64 +132,6 @@ bool SelfTest::step(uint32_t iTick) {
             return true;
         }
         m_pStall->reset();
-        m_ePhase = SELF_TEST_PHASE_E::HOMING_START;
-        break;
-    }
-    case SELF_TEST_PHASE_E::HOMING_START: {
-
-        m_iHomingStartTick = iTick;
-        m_bHomingNotified = false;
-        m_ePhase = SELF_TEST_PHASE_E::HOMING_WAIT;
-        break;
-    }
-    case SELF_TEST_PHASE_E::HOMING_WAIT: {
-        if (m_bHomingNotified) {
-            set_item_pass(SELF_TEST_ITEM_E::HOMING, m_bHomingSuccess);
-            if (!m_bHomingSuccess) {
-                m_ePhase = SELF_TEST_PHASE_E::DONE;
-                finalize();
-                return true;
-            }
-            m_stResult.iTotalRange = m_iHomingTotalRange;
-            m_ePhase = SELF_TEST_PHASE_E::RANGE_CHECK;
-        } else if (iTick - m_iHomingStartTick > HOMING_TIMEOUT_MS) {
-            set_item_pass(SELF_TEST_ITEM_E::HOMING, false);
-            m_ePhase = SELF_TEST_PHASE_E::DONE;
-            finalize();
-            return true;
-        }
-        break;
-    }
-    case SELF_TEST_PHASE_E::RANGE_CHECK: {
-        bool bPass = m_iHomingTotalRange > MIN_VALID_RANGE;
-        set_item_pass(SELF_TEST_ITEM_E::RANGE_CHECK, bPass);
-        if (!bPass) { m_ePhase = SELF_TEST_PHASE_E::DONE; finalize(); return true; }
-        m_ePhase = SELF_TEST_PHASE_E::LIMITS_CHECK;
-        break;
-    }
-    case SELF_TEST_PHASE_E::LIMITS_CHECK: {
-        int32_t iSoftMin = MotorCtrl::DEADZONE;
-        int32_t iSoftMax = m_iHomingTotalRange - MotorCtrl::DEADZONE;
-        bool bPass = iSoftMin < iSoftMax;
-        set_item_pass(SELF_TEST_ITEM_E::LIMITS_CHECK, bPass);
-        if (!bPass) { m_ePhase = SELF_TEST_PHASE_E::DONE; finalize(); return true; }
-        m_ePhase = SELF_TEST_PHASE_E::FRAM_SAVE;
-        break;
-    }
-    case SELF_TEST_PHASE_E::FRAM_SAVE: {
-        FRAM_PARAMS_S stParams{};
-        stParams.magic_number = FramStorage::MAGIC;
-        stParams.version = 1;
-        stParams.current_position = m_pEncoder->get_position();
-        stParams.homing_done = 1;
-        stParams.position_valid = 0xFF;
-        stParams.encoder_compensated = m_bEncoderReversed ? 1 : 0;
-        bool bSaved = m_pFram->save_params(stParams);
-        // Verify by reading back
-        FRAM_PARAMS_S stVerify{};
-        bool bLoaded = m_pFram->load_params(stVerify);
-        bool bPass = bSaved && bLoaded && FramStorage::verify_crc(stVerify);
-        set_item_pass(SELF_TEST_ITEM_E::FRAM_SAVE, bPass);
         m_ePhase = SELF_TEST_PHASE_E::DONE;
         finalize();
         return true;
@@ -222,9 +157,9 @@ void SelfTest::finalize() {
 
 void SelfTest::print_report() {
     // --- Helper lambdas for ADC conversions ---
-    // ADC→mA: R_sense=0.2Ω, Vref=3.3V, 12-bit ADC
+    // ADC->mA: R_sense=0.2 Ohm, Vref=3.3V, 12-bit ADC
     // V_sense = ADC * 3300mV / 4095
-    // I = V_sense / R_sense = V_sense / 0.2Ω = V_sense * 5  (mV→mA when R in Ω)
+    // I = V_sense / R_sense = V_sense / 0.2 = V_sense * 5  (mV->mA when R in Ohm)
     // I_mA = ADC * 3300 * 5 / 4095 = ADC * 16500 / 4095
     auto adc_to_current_ma = [](uint16_t adc) -> uint32_t {
         return static_cast<uint32_t>(adc) * 16500 / 4095;
@@ -278,56 +213,12 @@ void SelfTest::print_report() {
     swo_printf(" ENCODER_DIR .. %s  compensated=%s\n",
                m_stResult.aPass[3] ? "PASS" : "FAIL",
                m_stResult.bEncoderCompensated ? "YES" : "NO");
-    // HOMING
-    swo_printf(" HOMING ....... %s  range=%ld counts\n",
-               m_stResult.aPass[4] ? "PASS" : "FAIL",
-               static_cast<long>(m_stResult.iTotalRange));
-    // RANGE_CHECK
-    swo_printf(" RANGE_CHECK .. %s  %ld > %ld\n",
-               m_stResult.aPass[5] ? "PASS" : "FAIL",
-               static_cast<long>(m_stResult.iTotalRange),
-               static_cast<long>(MIN_VALID_RANGE));
-    // LIMITS_CHECK
-    {
-        // SOFT_LIMIT_OFFSET=800 from MotorTask
-        constexpr int32_t SOFT_LIMIT_OFFSET = 800;
-        int32_t iSoftMin = SOFT_LIMIT_OFFSET;
-        int32_t iSoftMax = m_stResult.iTotalRange - SOFT_LIMIT_OFFSET;
-        swo_printf(" LIMITS_CHECK . %s  soft=[%ld, %ld]\n",
-                   m_stResult.aPass[6] ? "PASS" : "FAIL",
-                   static_cast<long>(iSoftMin), static_cast<long>(iSoftMax));
-    }
-    // FRAM_SAVE
-    swo_printf(" FRAM_SAVE .... %s  CRC verified\n",
-               m_stResult.aPass[7] ? "PASS" : "FAIL");
-
-    // --- Lens Zoom ---
-    {
-        uint16_t iMinZ = m_pZoom->get_min_zoom();
-        uint16_t iMaxZ = m_pZoom->get_max_zoom();
-        uint8_t iCount = m_pZoom->get_entry_count();
-        swo_printf("\n[Lens Zoom]\n");
-        swo_printf(" Optical range   %u.%ux ~ %u.%ux\n",
-                   iMinZ / 10, iMinZ % 10, iMaxZ / 10, iMaxZ % 10);
-        swo_printf(" Zoom presets    %u (", iCount);
-        // Print preset list from zoom table min to max
-        bool bFirst = true;
-        uint16_t iZoom = iMinZ;
-        for (uint8_t i = 0; i < iCount; ++i) {
-            if (!bFirst) swo_printf(",");
-            swo_printf("%u", iZoom);
-            bFirst = false;
-            iZoom = m_pZoom->get_next_zoom(iZoom, 1);
-            if (iZoom == 0) break;
-        }
-        swo_printf(")\n");
-    }
 
     // --- Mechanical ---
-    if (m_stResult.iTotalRange > 0) {
+    {
         constexpr int32_t SOFT_LIMIT_OFFSET = 800;  // from MotorTask
         constexpr int32_t HOMING_RETRACT = 8000;     // from MotorTask
-        int32_t iRange = m_stResult.iTotalRange;
+        int32_t iRange = ZoomTable::TOTAL_RANGE;
         swo_printf("\n[Mechanical]\n");
         swo_printf(" Total range     %ld counts\n", static_cast<long>(iRange));
         swo_printf(" Hard limits     [0, %ld]\n", static_cast<long>(iRange));

@@ -12,7 +12,6 @@ protected:
     Encoder encoder;
     MotorCtrl motor;
     StallDetect stall;
-    ZoomTable zoom;
 
     SPI_HandleTypeDef hspi;
     TIM_HandleTypeDef htim3;
@@ -33,19 +32,17 @@ protected:
         encoder.init();
         motor.init(&htim3, &hdac, &encoder);
         stall.init();
-        zoom.init();
-        zoom.load_defaults();
 
-        selfTest.init(&pm, &fram, &encoder, &motor, &stall, &zoom,
+        selfTest.init(&pm, &fram, &encoder, &motor, &stall,
                        &iAdcVoltage, &iAdcCurrent);
         iTick = 0;
     }
 
     uint32_t tick() { return iTick++; }
 
-    // Advance through voltage, baseline, fram_rw, encoder_dir to reach HOMING_START
-    // Requires: spi_rx_buffer set with FRAM_TEST_BYTE
-    void advance_to_homing_start() {
+    // Advance through voltage, baseline, fram_rw to reach ENCODER_DIR_START
+    // Then complete encoder dir check (normal direction) to reach DONE
+    void advance_to_encoder_dir_done() {
         selfTest.start();
         selfTest.step(tick()); // VOLTAGE -> BASELINE
         selfTest.step(tick()); // BASELINE -> FRAM_RW
@@ -54,18 +51,10 @@ protected:
 
         // Simulate encoder moving to target
         encoder.set_position(SelfTest::ENCODER_DIR_MOVE);
-        selfTest.step(tick()); // ENCODER_DIR_WAIT -> motor IDLE, dir OK -> HOMING_START
+        bool bDone = selfTest.step(tick()); // ENCODER_DIR_WAIT -> DONE
 
-        ASSERT_EQ(selfTest.get_phase(), SELF_TEST_PHASE_E::HOMING_START);
-    }
-
-    // Advance through homing to reach RANGE_CHECK
-    void advance_to_range_check(int32_t iTotalRange) {
-        advance_to_homing_start();
-        selfTest.step(tick()); // HOMING_START -> HOMING_WAIT
-        selfTest.notify_homing_done(true, iTotalRange);
-        selfTest.step(tick()); // HOMING_WAIT -> RANGE_CHECK
-        ASSERT_EQ(selfTest.get_phase(), SELF_TEST_PHASE_E::RANGE_CHECK);
+        ASSERT_TRUE(bDone);
+        ASSERT_EQ(selfTest.get_phase(), SELF_TEST_PHASE_E::DONE);
     }
 };
 
@@ -142,18 +131,19 @@ TEST_F(SelfTestTest, EncoderDir_Pass_NormalDirection) {
     selfTest.step(tick()); // encoder_dir_start -> motor commanded
 
     encoder.set_position(SelfTest::ENCODER_DIR_MOVE);
-    selfTest.step(tick()); // encoder_dir_wait -> motor IDLE, delta OK -> HOMING_START
+    bool bDone = selfTest.step(tick()); // encoder_dir_wait -> motor IDLE, dir OK -> DONE
 
-    EXPECT_EQ(selfTest.get_phase(), SELF_TEST_PHASE_E::HOMING_START);
+    EXPECT_TRUE(bDone);
+    EXPECT_EQ(selfTest.get_phase(), SELF_TEST_PHASE_E::DONE);
     EXPECT_TRUE(selfTest.get_result().aPass[static_cast<uint8_t>(SELF_TEST_ITEM_E::ENCODER_DIR)]);
     EXPECT_FALSE(selfTest.get_result().bEncoderCompensated);
 }
 
 TEST_F(SelfTestTest, EncoderDir_AtPositiveLimit_Pass) {
-    // Forward delta=0 (at positive limit), reverse delta < -500 → direction correct
+    // Forward delta=0 (at positive limit), reverse delta < -500 -> direction correct
     mock::get_log().spi_rx_buffer = {SelfTest::FRAM_TEST_BYTE};
     encoder.set_position(5000);
-    selfTest.init(&pm, &fram, &encoder, &motor, &stall, &zoom,
+    selfTest.init(&pm, &fram, &encoder, &motor, &stall,
                    &iAdcVoltage, &iAdcCurrent);
     selfTest.start();
     selfTest.step(tick()); // voltage
@@ -171,18 +161,19 @@ TEST_F(SelfTestTest, EncoderDir_AtPositiveLimit_Pass) {
     // Reverse probe: motor moves backward, encoder decreases (direction correct)
     selfTest.step(tick()); // encoder_dir_reverse -> starts reverse move from 5000
     encoder.set_position(5000 - SelfTest::ENCODER_DIR_MOVE); // moved to 3000
-    selfTest.step(tick()); // reverse_wait -> delta=-2000 < -500 -> PASS
+    bool bDone = selfTest.step(tick()); // reverse_wait -> delta=-2000 < -500 -> PASS -> DONE
 
+    EXPECT_TRUE(bDone);
     EXPECT_TRUE(selfTest.get_result().aPass[static_cast<uint8_t>(SELF_TEST_ITEM_E::ENCODER_DIR)]);
     EXPECT_FALSE(selfTest.get_result().bEncoderCompensated);
-    EXPECT_EQ(selfTest.get_phase(), SELF_TEST_PHASE_E::HOMING_START);
+    EXPECT_EQ(selfTest.get_phase(), SELF_TEST_PHASE_E::DONE);
 }
 
 TEST_F(SelfTestTest, EncoderDir_Compensated) {
-    // Forward delta=0, reverse delta > 500 → encoder reversed → flip polarity
+    // Forward delta=0, reverse delta > 500 -> encoder reversed -> flip polarity
     mock::get_log().spi_rx_buffer = {SelfTest::FRAM_TEST_BYTE};
     encoder.set_position(5000);
-    selfTest.init(&pm, &fram, &encoder, &motor, &stall, &zoom,
+    selfTest.init(&pm, &fram, &encoder, &motor, &stall,
                    &iAdcVoltage, &iAdcCurrent);
     selfTest.start();
     selfTest.step(tick()); // voltage
@@ -201,18 +192,19 @@ TEST_F(SelfTestTest, EncoderDir_Compensated) {
     selfTest.step(tick()); // encoder_dir_reverse -> starts reverse move
     encoder.set_position(5000 + SelfTest::ENCODER_DIR_MOVE); // encoder goes up (wrong)
     motor.emergency_stop(); // stall detect would stop motor in real HW
-    selfTest.step(tick()); // reverse_wait -> delta=+2000 > 500 -> flip -> PASS(compensated)
+    bool bDone = selfTest.step(tick()); // reverse_wait -> delta=+2000 > 500 -> flip -> PASS(compensated) -> DONE
 
+    EXPECT_TRUE(bDone);
     EXPECT_TRUE(selfTest.get_result().aPass[static_cast<uint8_t>(SELF_TEST_ITEM_E::ENCODER_DIR)]);
     EXPECT_TRUE(selfTest.get_result().bEncoderCompensated);
-    EXPECT_EQ(selfTest.get_phase(), SELF_TEST_PHASE_E::HOMING_START);
+    EXPECT_EQ(selfTest.get_phase(), SELF_TEST_PHASE_E::DONE);
 }
 
 TEST_F(SelfTestTest, EncoderDir_HardwareFail) {
-    // Both directions delta ≈ 0 → hardware fault
+    // Both directions delta ~= 0 -> hardware fault
     mock::get_log().spi_rx_buffer = {SelfTest::FRAM_TEST_BYTE};
     encoder.set_position(5000);
-    selfTest.init(&pm, &fram, &encoder, &motor, &stall, &zoom,
+    selfTest.init(&pm, &fram, &encoder, &motor, &stall,
                    &iAdcVoltage, &iAdcCurrent);
     selfTest.start();
     selfTest.step(tick()); // voltage
@@ -235,102 +227,26 @@ TEST_F(SelfTestTest, EncoderDir_HardwareFail) {
     EXPECT_FALSE(selfTest.get_result().aPass[static_cast<uint8_t>(SELF_TEST_ITEM_E::ENCODER_DIR)]);
 }
 
-TEST_F(SelfTestTest, Homing_Pass) {
-    mock::get_log().spi_rx_buffer = {SelfTest::FRAM_TEST_BYTE};
-    advance_to_homing_start();
-    selfTest.step(tick()); // HOMING_START -> HOMING_WAIT
-
-    selfTest.notify_homing_done(true, 346292);
-    selfTest.step(tick()); // HOMING_WAIT -> sees notification -> RANGE_CHECK
-
-    EXPECT_TRUE(selfTest.get_result().aPass[static_cast<uint8_t>(SELF_TEST_ITEM_E::HOMING)]);
-    EXPECT_EQ(selfTest.get_result().iTotalRange, 346292);
-}
-
-TEST_F(SelfTestTest, Homing_Timeout) {
-    mock::get_log().spi_rx_buffer = {SelfTest::FRAM_TEST_BYTE};
-    advance_to_homing_start();
-
-    uint32_t iStartTick = iTick;
-    selfTest.step(iStartTick); // HOMING_START -> HOMING_WAIT (start tick recorded)
-    iTick = iStartTick + 1;
-
-    // Advance past timeout without notification
-    bool bDone = selfTest.step(iStartTick + SelfTest::HOMING_TIMEOUT_MS + 1);
-    EXPECT_TRUE(bDone);
-    EXPECT_FALSE(selfTest.get_result().aPass[static_cast<uint8_t>(SELF_TEST_ITEM_E::HOMING)]);
-}
-
-TEST_F(SelfTestTest, RangeCheck_Pass) {
-    mock::get_log().spi_rx_buffer = {SelfTest::FRAM_TEST_BYTE};
-    advance_to_range_check(346292);
-    selfTest.step(tick()); // RANGE_CHECK -> LIMITS_CHECK
-    EXPECT_TRUE(selfTest.get_result().aPass[static_cast<uint8_t>(SELF_TEST_ITEM_E::RANGE_CHECK)]);
-}
-
-TEST_F(SelfTestTest, RangeCheck_Fail_TooSmall) {
-    mock::get_log().spi_rx_buffer = {SelfTest::FRAM_TEST_BYTE};
-    advance_to_range_check(5000);
-    bool bDone = selfTest.step(tick());
-    EXPECT_TRUE(bDone);
-    EXPECT_FALSE(selfTest.get_result().aPass[static_cast<uint8_t>(SELF_TEST_ITEM_E::RANGE_CHECK)]);
-}
-
-TEST_F(SelfTestTest, LimitsCheck_Pass) {
-    mock::get_log().spi_rx_buffer = {SelfTest::FRAM_TEST_BYTE};
-    advance_to_range_check(346292);
-    selfTest.step(tick()); // RANGE_CHECK -> LIMITS_CHECK
-    selfTest.step(tick()); // LIMITS_CHECK -> FRAM_SAVE
-    EXPECT_TRUE(selfTest.get_result().aPass[static_cast<uint8_t>(SELF_TEST_ITEM_E::LIMITS_CHECK)]);
-}
-
-TEST_F(SelfTestTest, FramSave_Pass) {
-    // Prepare SPI rx buffer: first test_rw readback, then load_params readback
-    FRAM_PARAMS_S stExpected{};
-    stExpected.magic_number = FramStorage::MAGIC;
-    stExpected.version = 1;
-    stExpected.homing_done = 1;
-    stExpected.position_valid = 0xFF;
-    stExpected.crc16 = FramStorage::calc_crc(stExpected);
-
-    std::vector<uint8_t> rx_data;
-    rx_data.push_back(SelfTest::FRAM_TEST_BYTE); // for test_rw
-    const uint8_t* pBytes = reinterpret_cast<const uint8_t*>(&stExpected);
-    rx_data.insert(rx_data.end(), pBytes, pBytes + sizeof(stExpected)); // for load_params
-    mock::get_log().spi_rx_buffer = rx_data;
-
-    advance_to_range_check(346292);
-    selfTest.step(tick()); // RANGE_CHECK -> LIMITS_CHECK
-    selfTest.step(tick()); // LIMITS_CHECK -> FRAM_SAVE
-    bool bDone = selfTest.step(tick()); // FRAM_SAVE -> DONE
-    EXPECT_TRUE(bDone);
-    EXPECT_TRUE(selfTest.get_result().aPass[static_cast<uint8_t>(SELF_TEST_ITEM_E::FRAM_SAVE)]);
-    EXPECT_TRUE(selfTest.get_result().bAllPassed);
-}
-
 TEST_F(SelfTestTest, FullSequence_AllPass) {
-    FRAM_PARAMS_S stExpected{};
-    stExpected.magic_number = FramStorage::MAGIC;
-    stExpected.version = 1;
-    stExpected.homing_done = 1;
-    stExpected.position_valid = 0xFF;
-    stExpected.crc16 = FramStorage::calc_crc(stExpected);
+    mock::get_log().spi_rx_buffer = {SelfTest::FRAM_TEST_BYTE};
 
-    std::vector<uint8_t> rx_data;
-    rx_data.push_back(SelfTest::FRAM_TEST_BYTE);
-    const uint8_t* pBytes = reinterpret_cast<const uint8_t*>(&stExpected);
-    rx_data.insert(rx_data.end(), pBytes, pBytes + sizeof(stExpected));
-    mock::get_log().spi_rx_buffer = rx_data;
+    selfTest.start();
+    selfTest.step(tick()); // VOLTAGE -> BASELINE
+    selfTest.step(tick()); // BASELINE -> FRAM_RW
+    selfTest.step(tick()); // FRAM_RW -> ENCODER_DIR_START
+    selfTest.step(tick()); // ENCODER_DIR_START -> ENCODER_DIR_WAIT
 
-    advance_to_range_check(346292);
-    selfTest.step(tick()); // RANGE_CHECK -> LIMITS_CHECK
-    selfTest.step(tick()); // LIMITS_CHECK -> FRAM_SAVE
-    bool bDone = selfTest.step(tick()); // FRAM_SAVE -> DONE
+    encoder.set_position(SelfTest::ENCODER_DIR_MOVE);
+    bool bDone = selfTest.step(tick()); // ENCODER_DIR_WAIT -> DONE
+
     EXPECT_TRUE(bDone);
 
     auto& result = selfTest.get_result();
     EXPECT_TRUE(result.bAllPassed);
-    EXPECT_EQ(result.iTotalRange, 346292);
     EXPECT_EQ(result.iMeasuredVoltage, 2017);
     EXPECT_FALSE(result.bEncoderCompensated);
+}
+
+TEST_F(SelfTestTest, ItemCount_Is4) {
+    EXPECT_EQ(static_cast<uint8_t>(SELF_TEST_ITEM_E::COUNT), 4);
 }

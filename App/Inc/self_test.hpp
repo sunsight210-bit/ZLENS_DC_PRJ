@@ -6,7 +6,6 @@
 #include "encoder.hpp"
 #include "motor_ctrl.hpp"
 #include "stall_detect.hpp"
-#include "zoom_table.hpp"
 
 #ifdef BUILD_TESTING
 #include "mock_hal.hpp"
@@ -21,18 +20,13 @@ enum class SELF_TEST_ITEM_E : uint8_t {
     BASELINE,
     FRAM_RW,
     ENCODER_DIR,
-    HOMING,
-    RANGE_CHECK,
-    LIMITS_CHECK,
-    FRAM_SAVE,
-    COUNT  // must be last
+    COUNT  // now 4
 };
 
 struct SELF_TEST_RESULT_S {
     bool aPass[static_cast<uint8_t>(SELF_TEST_ITEM_E::COUNT)];
     uint16_t iMeasuredVoltage;
     uint16_t iMeasuredBaseline;
-    int32_t  iTotalRange;
     bool bEncoderCompensated;
     bool bAllPassed;
 };
@@ -46,11 +40,6 @@ enum class SELF_TEST_PHASE_E : uint8_t {
     ENCODER_DIR_WAIT,
     ENCODER_DIR_REVERSE,
     ENCODER_DIR_REVERSE_WAIT,
-    HOMING_START,
-    HOMING_WAIT,
-    RANGE_CHECK,
-    LIMITS_CHECK,
-    FRAM_SAVE,
     DONE
 };
 
@@ -59,20 +48,17 @@ public:
     static constexpr uint16_t BASELINE_MAX = 50;
     static constexpr int32_t  ENCODER_DIR_MOVE = 2000;
     static constexpr int32_t  ENCODER_DIR_THRESHOLD = 500;
-    static constexpr uint32_t HOMING_TIMEOUT_MS = 60000;
     static constexpr uint32_t ENCODER_DIR_TIMEOUT_MS = 3000;
-    static constexpr int32_t  MIN_VALID_RANGE = 10000;
     static constexpr uint16_t FRAM_TEST_ADDR = 0x00FE;
     static constexpr uint8_t  FRAM_TEST_BYTE = 0xA5;
 
     void init(PowerMonitor* pPm, FramStorage* pFram, Encoder* pEncoder,
-              MotorCtrl* pMotor, StallDetect* pStall, ZoomTable* pZoom,
+              MotorCtrl* pMotor, StallDetect* pStall,
               uint16_t* pAdcVoltage, uint16_t* pAdcCurrent);
 
     void start();
     bool step(uint32_t iTick);  // returns true when done
     const SELF_TEST_RESULT_S& get_result() const { return m_stResult; }
-    void notify_homing_done(bool bSuccess, int32_t iTotalRange);
 
     SELF_TEST_PHASE_E get_phase() const { return m_ePhase; }
     bool is_motor_idle() const { return m_pMotor->get_state() == MOTOR_STATE_E::IDLE; }
@@ -83,7 +69,6 @@ private:
     Encoder* m_pEncoder = nullptr;
     MotorCtrl* m_pMotor = nullptr;
     StallDetect* m_pStall = nullptr;
-    ZoomTable* m_pZoom = nullptr;
     uint16_t* m_pAdcVoltage = nullptr;
     uint16_t* m_pAdcCurrent = nullptr;
 
@@ -92,10 +77,6 @@ private:
 
     int32_t m_iEncoderStartPos = 0;
     uint32_t m_iEncoderDirStartTick = 0;
-    uint32_t m_iHomingStartTick = 0;
-    bool m_bHomingNotified = false;
-    bool m_bHomingSuccess = false;
-    int32_t m_iHomingTotalRange = 0;
     bool m_bEncoderReversed = false;
 
     void set_item_pass(SELF_TEST_ITEM_E eItem, bool bPass);
