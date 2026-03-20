@@ -43,7 +43,13 @@ public:
     static constexpr int32_t BL_MEASURE_MID = 107000;
     static constexpr int32_t BL_REVERSE_DIST = 4096;
 
+    // Accuracy test constants
+    static constexpr uint8_t ACC_NUM_TRIPS = 3;
+    static constexpr int32_t ACC_START_POS = 800;      // 0.6X position
+    static constexpr int32_t ACC_END_POS = 206821;     // ~7.0X position
+
     void start_backlash_measure();
+    void start_accuracy_test();
 
 private:
     MotorCtrl* m_pMotor = nullptr;
@@ -79,11 +85,23 @@ private:
     int32_t m_aBLSamples[3] = {};
     uint8_t m_iBLSampleIdx = 0;
 
+    // Accuracy test sub-states
+    enum class ACC_TEST_PHASE_E : uint8_t {
+        MOVE_TO_START, MOVE_TO_END, MOVE_TO_START_RETURN
+    };
+    ACC_TEST_PHASE_E m_eAccPhase = ACC_TEST_PHASE_E::MOVE_TO_START;
+    uint8_t m_iAccTripCount = 0;
+    int32_t m_iAccRefPos = 0;
+    int32_t m_aAccErrors[6] = {};   // 3 trips × 2 directions
+    uint8_t m_iAccErrorIdx = 0;
+
     void dispatch_command(const CMD_MESSAGE_S& stCmd);
     void process_moving();
     void process_homing();
     void process_cycling();
     void process_backlash_measure();
+    void process_accuracy_test();
+    void print_accuracy_report();
     void handle_stall();
     void handle_overcurrent();
     void handle_power_down();

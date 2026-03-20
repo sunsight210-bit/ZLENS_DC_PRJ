@@ -84,6 +84,19 @@ protected:
             task.run_once();
         }
     }
+
+    void complete_homing() {
+        task.start_homing();
+        trigger_stall(); // FAST → RETRACT
+        encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
+        iAdcCurrent = 0;
+        for (int i = 0; i < 10; ++i) task.run_once();
+        trigger_stall(); // SLOW → SETTLE
+        encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
+        iAdcCurrent = 0;
+        for (int i = 0; i < 10; ++i) task.run_once();
+        drain_rsp();
+    }
 };
 
 TEST_F(MotorTaskTest, Init_StateIsIdle) {
@@ -509,4 +522,44 @@ TEST_F(MotorTaskTest, BacklashMeasure_ZeroError_BacklashIsZero) {
 
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
     EXPECT_EQ(motor.get_backlash(), 0);
+}
+
+// ============================================================
+// Accuracy Test (Task 7)
+// ============================================================
+
+TEST_F(MotorTaskTest, AccuracyTest_StartsMovingToStart) {
+    complete_homing();
+    task.start_accuracy_test();
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::ACCURACY_TEST);
+    EXPECT_EQ(motor.get_target(), MotorTask::ACC_START_POS);
+}
+
+TEST_F(MotorTaskTest, AccuracyTest_EnablesBacklash) {
+    complete_homing();
+    motor.set_backlash_enabled(false);
+    task.start_accuracy_test();
+    EXPECT_TRUE(motor.is_backlash_enabled());
+}
+
+TEST_F(MotorTaskTest, AccuracyTest_CompletesAfter3Trips) {
+    complete_homing();
+    motor.set_backlash(0);  // Simplify: no backlash overshoot in state machine test
+    task.start_accuracy_test();
+
+    // Move to start
+    encoder.set_position(MotorTask::ACC_START_POS);
+    for (int i = 0; i < 10; ++i) task.run_once();
+
+    // 3 round trips
+    for (int trip = 0; trip < 3; ++trip) {
+        // Forward to end
+        encoder.set_position(MotorTask::ACC_END_POS);
+        for (int i = 0; i < 10; ++i) task.run_once();
+        // Return to start
+        encoder.set_position(MotorTask::ACC_START_POS);
+        for (int i = 0; i < 10; ++i) task.run_once();
+    }
+
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
 }

@@ -79,6 +79,9 @@ void MotorTask::run_once() {
     case TASK_STATE_E::BACKLASH_MEASURE:
         process_backlash_measure();
         break;
+    case TASK_STATE_E::ACCURACY_TEST:
+        process_accuracy_test();
+        break;
     default:
         break;
     }
@@ -454,6 +457,87 @@ void MotorTask::process_backlash_measure() {
         break;
     }
     }
+}
+
+void MotorTask::start_accuracy_test() {
+    m_pMotor->set_backlash_enabled(true);  // test WITH compensation
+    m_eAccPhase = ACC_TEST_PHASE_E::MOVE_TO_START;
+    m_iAccTripCount = 0;
+    m_iAccErrorIdx = 0;
+    m_eTaskState = TASK_STATE_E::ACCURACY_TEST;
+    m_pStall->set_direction(StallDetect::Direction::FORWARD);
+    m_pStall->start_motor();
+    m_pMotor->move_to(ACC_START_POS);
+}
+
+void MotorTask::process_accuracy_test() {
+    // Wait for full completion (including APPROACHING phase 2)
+    if (m_pMotor->get_state() != MOTOR_STATE_E::IDLE) return;
+
+    switch (m_eAccPhase) {
+    case ACC_TEST_PHASE_E::MOVE_TO_START:
+        m_iAccRefPos = m_pEncoder->get_position();
+        m_eAccPhase = ACC_TEST_PHASE_E::MOVE_TO_END;
+        m_pStall->set_direction(StallDetect::Direction::FORWARD);
+        m_pStall->start_motor();
+        m_pMotor->move_to(ACC_END_POS);
+        break;
+
+    case ACC_TEST_PHASE_E::MOVE_TO_END: {
+        int32_t iError = m_pEncoder->get_position() - ACC_END_POS;
+        m_aAccErrors[m_iAccErrorIdx++] = iError;
+        m_eAccPhase = ACC_TEST_PHASE_E::MOVE_TO_START_RETURN;
+        m_pStall->set_direction(StallDetect::Direction::REVERSE);
+        m_pStall->start_motor();
+        m_pMotor->move_to(ACC_START_POS);
+        break;
+    }
+
+    case ACC_TEST_PHASE_E::MOVE_TO_START_RETURN: {
+        int32_t iError = m_pEncoder->get_position() - ACC_START_POS;
+        m_aAccErrors[m_iAccErrorIdx++] = iError;
+        m_iAccTripCount++;
+        if (m_iAccTripCount < ACC_NUM_TRIPS) {
+            m_eAccPhase = ACC_TEST_PHASE_E::MOVE_TO_END;
+            m_pStall->set_direction(StallDetect::Direction::FORWARD);
+            m_pStall->start_motor();
+            m_pMotor->move_to(ACC_END_POS);
+        } else {
+            print_accuracy_report();
+            m_pStall->reset();
+            m_eTaskState = TASK_STATE_E::IDLE;
+            m_pSm->transition_to(SYSTEM_STATE_E::READY);
+        }
+        break;
+    }
+    }
+}
+
+void MotorTask::print_accuracy_report() {
+#ifndef BUILD_TESTING
+    int32_t iDrift = m_pEncoder->get_position() - m_iAccRefPos;
+    int32_t iMaxErr = 0;
+    bool bPass = true;
+
+    swo_printf("\n============ ACCURACY TEST REPORT ============\n");
+    swo_printf(" Backlash: %d counts\n", m_pMotor->get_backlash());
+
+    for (uint8_t i = 0; i < m_iAccErrorIdx; ++i) {
+        int32_t iErr = m_aAccErrors[i];
+        if (iErr < 0 && -iErr > iMaxErr) iMaxErr = -iErr;
+        if (iErr > 0 && iErr > iMaxErr) iMaxErr = iErr;
+        if (iErr > MotorCtrl::DEADZONE || iErr < -MotorCtrl::DEADZONE) bPass = false;
+        swo_printf(" Trip %u %s: error=%ld counts\n",
+                   i / 2 + 1, (i % 2 == 0) ? "FWD" : "REV",
+                   static_cast<long>(iErr));
+    }
+
+    if (iDrift > MotorCtrl::DEADZONE || iDrift < -MotorCtrl::DEADZONE) bPass = false;
+    swo_printf(" Cumulative drift: %ld counts\n", static_cast<long>(iDrift));
+    swo_printf(" Max error: %ld counts\n", static_cast<long>(iMaxErr));
+    swo_printf(" RESULT: %s\n", bPass ? "PASS" : "FAIL");
+    swo_printf("===============================================\n");
+#endif
 }
 
 void MotorTask::send_response(uint8_t cmd, uint16_t param) {
