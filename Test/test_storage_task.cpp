@@ -125,6 +125,39 @@ TEST_F(StorageTaskTest, UpdatesPosition_InParams) {
     EXPECT_EQ(task.get_params().current_zoom_x10, 80);
 }
 
+TEST_F(StorageTaskTest, BacklashSave_UpdatesFramParams) {
+    SAVE_MESSAGE_S msg = {10000, 60, save_reason::ARRIVED, 42, 0xFF};
+    xQueueSend(saveQ, &msg, 0);
+    task.run_once();
+
+    EXPECT_EQ(task.get_params().backlash_counts, 42);
+    EXPECT_EQ(task.get_params().backlash_valid, 0xFF);
+}
+
+TEST_F(StorageTaskTest, BacklashSave_IgnoredWhenNotCalibrated) {
+    // First set backlash
+    SAVE_MESSAGE_S msg1 = {10000, 60, save_reason::ARRIVED, 42, 0xFF};
+    xQueueSend(saveQ, &msg1, 0);
+    task.run_once();
+    EXPECT_EQ(task.get_params().backlash_counts, 42);
+
+    // Normal save should not overwrite backlash
+    SAVE_MESSAGE_S msg2 = {20000, 80, save_reason::ARRIVED, 0, 0};
+    xQueueSend(saveQ, &msg2, 0);
+    task.run_once();
+
+    EXPECT_EQ(task.get_params().current_position, 20000);
+    // Backlash should be unchanged
+    EXPECT_EQ(task.get_params().backlash_counts, 42);
+    EXPECT_EQ(task.get_params().backlash_valid, 0xFF);
+}
+
+TEST(SaveMessageTest, BacklashFields_DefaultZero) {
+    SAVE_MESSAGE_S stSave = {};
+    EXPECT_EQ(stSave.backlash_counts, 0);
+    EXPECT_EQ(stSave.backlash_valid, 0);
+}
+
 TEST_F(StorageTaskTest, MultipleSaves_Sequential) {
     send_save(1000, 60, save_reason::ARRIVED);
     send_save(2000, 80, save_reason::ARRIVED);

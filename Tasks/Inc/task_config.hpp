@@ -98,6 +98,8 @@ struct SAVE_MESSAGE_S {
     int32_t position;
     uint16_t zoom_x10;
     uint8_t reason; // see save_reason namespace
+    int16_t backlash_counts;    // 0 = don't update
+    uint8_t backlash_valid;     // 0 = don't update, 0xFF = calibrated
 };
 
 // Task priorities

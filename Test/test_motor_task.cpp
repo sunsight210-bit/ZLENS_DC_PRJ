@@ -627,6 +627,50 @@ TEST_F(MotorTaskTest, FullDiag_ChainsBacklashToAccuracy) {
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::ACCURACY_TEST);
 }
 
+TEST_F(MotorTaskTest, BacklashMeasure_SavesBacklashToQueue) {
+    complete_homing();
+    task.start_backlash_measure();
+
+    // Arrive at mid
+    encoder.set_position(MotorTask::BL_MEASURE_MID);
+    for (int i = 0; i < 10; ++i) task.run_once();
+
+    // 3 cycles of reverse-forward with 80-count error
+    for (int cycle = 0; cycle < 3; ++cycle) {
+        encoder.set_position(MotorTask::BL_MEASURE_MID - MotorTask::BL_REVERSE_DIST);
+        for (int i = 0; i < 10; ++i) task.run_once();
+        encoder.set_position(MotorTask::BL_MEASURE_MID + 80);
+        for (int i = 0; i < 10; ++i) task.run_once();
+    }
+
+    // Check save queue has backlash data
+    SAVE_MESSAGE_S save;
+    bool bFoundBacklash = false;
+    while (receive_save(save)) {
+        if (save.backlash_valid == 0xFF) {
+            EXPECT_EQ(save.backlash_counts, 30);  // 80 - DEADZONE(50)
+            bFoundBacklash = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(bFoundBacklash);
+}
+
+TEST_F(MotorTaskTest, SendSave_DefaultBacklashFieldsZero) {
+    // Normal move should not carry backlash data
+    send_cmd(cmd::SET_ZOOM, 60);
+    task.run_once();
+
+    int32_t iTarget = motor.get_target();
+    encoder.set_position(iTarget);
+    for (int i = 0; i < 10; ++i) task.run_once();
+
+    SAVE_MESSAGE_S save;
+    EXPECT_TRUE(receive_save(save));
+    EXPECT_EQ(save.backlash_counts, 0);
+    EXPECT_EQ(save.backlash_valid, 0);
+}
+
 TEST_F(MotorTaskTest, HomingCmd_Param1_FullDiag) {
     sm.transition_to(SYSTEM_STATE_E::HOMING);
     send_cmd(cmd::HOMING, 1);  // param=1 -> full diagnostics

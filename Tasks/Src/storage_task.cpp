@@ -46,6 +46,12 @@ void StorageTask::handle_save(const SAVE_MESSAGE_S& stMsg) {
     m_stParams.current_zoom_x10 = stMsg.zoom_x10;
     m_stParams.last_save_reason = stMsg.reason;
 
+    // Update backlash if calibrated
+    if (stMsg.backlash_valid == 0xFF) {
+        m_stParams.backlash_counts = stMsg.backlash_counts;
+        m_stParams.backlash_valid = 0xFF;
+    }
+
     write_params();
     m_iLastSavedPosition = stMsg.position;
     m_iLastSaveTick = HAL_GetTick();
@@ -86,6 +92,10 @@ extern "C" void storage_task_entry(void* params) {
     FRAM_PARAMS_S stParams;
     if (task.restore_params(stParams)) {
         g_Encoder.set_position(stParams.current_position);
+        if (stParams.backlash_valid == 0xFF) {
+            g_Motor.set_backlash(stParams.backlash_counts);
+        }
+        g_Motor.set_backlash_enabled(true);
     }
 
     TickType_t xLastWake = xTaskGetTickCount();

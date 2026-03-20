@@ -456,6 +456,16 @@ void MotorTask::process_backlash_measure() {
             int16_t iBacklash = static_cast<int16_t>(
                 iAvg > MotorCtrl::DEADZONE ? iAvg - MotorCtrl::DEADZONE : 0);
             m_pMotor->set_backlash(iBacklash);
+
+            // Save backlash to FRAM
+            {
+                int32_t iPos = m_pEncoder->get_position();
+                uint16_t iZoom = m_pZoom->get_nearest_zoom(iPos);
+                SAVE_MESSAGE_S stSave = {iPos, iZoom, save_reason::ARRIVED,
+                                          iBacklash, 0xFF};
+                xQueueSend(m_saveQueue, &stSave, 0);
+            }
+
             m_pMotor->set_speed_limit(MotorCtrl::MAX_SPEED);
             m_pStall->reset();
 
@@ -561,7 +571,7 @@ void MotorTask::send_response(uint8_t cmd, uint16_t param) {
 void MotorTask::send_save(uint8_t reason) {
     int32_t iPos = m_pEncoder->get_position();
     uint16_t iZoom = m_pZoom->get_nearest_zoom(iPos);
-    SAVE_MESSAGE_S stSave = {iPos, iZoom, reason};
+    SAVE_MESSAGE_S stSave = {iPos, iZoom, reason, 0, 0};
     xQueueSend(m_saveQueue, &stSave, 0);
 }
 
