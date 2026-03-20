@@ -217,7 +217,8 @@ TEST_F(MonitorTaskTest, FirstBoot_SelfTestPass_SendsHomingCommand) {
     task.run_once(); // ENCODER_DIR_START
 
     encoder.set_position(SelfTest::ENCODER_DIR_MOVE);
-    task.run_once(); // ENCODER_DIR_WAIT -> DONE (all pass)
+    // Motor needs SETTLE_TICKS updates before reaching IDLE
+    for (int i = 0; i < 120; ++i) task.run_once();
 
     // Self-test passed, should send HOMING command
     EXPECT_TRUE(task.is_self_test_done());

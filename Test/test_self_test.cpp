@@ -51,7 +51,10 @@ protected:
 
         // Simulate encoder moving to target
         encoder.set_position(SelfTest::ENCODER_DIR_MOVE);
-        bool bDone = selfTest.step(tick()); // ENCODER_DIR_WAIT -> DONE
+        // Motor needs SETTLE_TICKS updates before reaching IDLE
+        bool bDone = false;
+        for (int i = 0; i < 120 && !bDone; ++i)
+            bDone = selfTest.step(tick());
 
         ASSERT_TRUE(bDone);
         ASSERT_EQ(selfTest.get_phase(), SELF_TEST_PHASE_E::DONE);
@@ -131,7 +134,10 @@ TEST_F(SelfTestTest, EncoderDir_Pass_NormalDirection) {
     selfTest.step(tick()); // encoder_dir_start -> motor commanded
 
     encoder.set_position(SelfTest::ENCODER_DIR_MOVE);
-    bool bDone = selfTest.step(tick()); // encoder_dir_wait -> motor IDLE, dir OK -> DONE
+    // Motor needs SETTLE_TICKS updates before reaching IDLE
+    bool bDone = false;
+    for (int i = 0; i < 120 && !bDone; ++i)
+        bDone = selfTest.step(tick());
 
     EXPECT_TRUE(bDone);
     EXPECT_EQ(selfTest.get_phase(), SELF_TEST_PHASE_E::DONE);
@@ -154,14 +160,20 @@ TEST_F(SelfTestTest, EncoderDir_AtPositiveLimit_Pass) {
     // Forward doesn't move (at positive limit)
     encoder.set_position(5000);
     motor.emergency_stop();
-    selfTest.step(tick()); // encoder_dir_wait -> delta=0 -> ENCODER_DIR_REVERSE
+    // Motor needs SETTLE_TICKS updates before reaching IDLE
+    for (int i = 0; i < 120; ++i) {
+        selfTest.step(tick());
+        if (selfTest.get_phase() == SELF_TEST_PHASE_E::ENCODER_DIR_REVERSE) break;
+    }
 
     EXPECT_EQ(selfTest.get_phase(), SELF_TEST_PHASE_E::ENCODER_DIR_REVERSE);
 
     // Reverse probe: motor moves backward, encoder decreases (direction correct)
     selfTest.step(tick()); // encoder_dir_reverse -> starts reverse move from 5000
     encoder.set_position(5000 - SelfTest::ENCODER_DIR_MOVE); // moved to 3000
-    bool bDone = selfTest.step(tick()); // reverse_wait -> delta=-2000 < -500 -> PASS -> DONE
+    bool bDone = false;
+    for (int i = 0; i < 120 && !bDone; ++i)
+        bDone = selfTest.step(tick());
 
     EXPECT_TRUE(bDone);
     EXPECT_TRUE(selfTest.get_result().aPass[static_cast<uint8_t>(SELF_TEST_ITEM_E::ENCODER_DIR)]);
@@ -184,7 +196,11 @@ TEST_F(SelfTestTest, EncoderDir_Compensated) {
     // Forward doesn't move
     encoder.set_position(5000);
     motor.emergency_stop();
-    selfTest.step(tick()); // -> ENCODER_DIR_REVERSE
+    // Motor needs SETTLE_TICKS updates before reaching IDLE
+    for (int i = 0; i < 120; ++i) {
+        selfTest.step(tick());
+        if (selfTest.get_phase() == SELF_TEST_PHASE_E::ENCODER_DIR_REVERSE) break;
+    }
 
     EXPECT_EQ(selfTest.get_phase(), SELF_TEST_PHASE_E::ENCODER_DIR_REVERSE);
 
@@ -192,7 +208,9 @@ TEST_F(SelfTestTest, EncoderDir_Compensated) {
     selfTest.step(tick()); // encoder_dir_reverse -> starts reverse move
     encoder.set_position(5000 + SelfTest::ENCODER_DIR_MOVE); // encoder goes up (wrong)
     motor.emergency_stop(); // stall detect would stop motor in real HW
-    bool bDone = selfTest.step(tick()); // reverse_wait -> delta=+2000 > 500 -> flip -> PASS(compensated) -> DONE
+    bool bDone = false;
+    for (int i = 0; i < 120 && !bDone; ++i)
+        bDone = selfTest.step(tick());
 
     EXPECT_TRUE(bDone);
     EXPECT_TRUE(selfTest.get_result().aPass[static_cast<uint8_t>(SELF_TEST_ITEM_E::ENCODER_DIR)]);
@@ -215,13 +233,19 @@ TEST_F(SelfTestTest, EncoderDir_HardwareFail) {
     // Forward doesn't move
     encoder.set_position(5000);
     motor.emergency_stop();
-    selfTest.step(tick()); // -> ENCODER_DIR_REVERSE
+    // Motor needs SETTLE_TICKS updates before reaching IDLE
+    for (int i = 0; i < 120; ++i) {
+        selfTest.step(tick());
+        if (selfTest.get_phase() == SELF_TEST_PHASE_E::ENCODER_DIR_REVERSE) break;
+    }
 
     // Reverse also doesn't move
     selfTest.step(tick()); // encoder_dir_reverse -> starts reverse move
     encoder.set_position(5000); // no movement
     motor.emergency_stop();
-    bool bDone = selfTest.step(tick()); // reverse_wait -> |delta|=0 -> FAIL
+    bool bDone = false;
+    for (int i = 0; i < 120 && !bDone; ++i)
+        bDone = selfTest.step(tick());
 
     EXPECT_TRUE(bDone);
     EXPECT_FALSE(selfTest.get_result().aPass[static_cast<uint8_t>(SELF_TEST_ITEM_E::ENCODER_DIR)]);
@@ -237,7 +261,10 @@ TEST_F(SelfTestTest, FullSequence_AllPass) {
     selfTest.step(tick()); // ENCODER_DIR_START -> ENCODER_DIR_WAIT
 
     encoder.set_position(SelfTest::ENCODER_DIR_MOVE);
-    bool bDone = selfTest.step(tick()); // ENCODER_DIR_WAIT -> DONE
+    // Motor needs SETTLE_TICKS updates before reaching IDLE
+    bool bDone = false;
+    for (int i = 0; i < 120 && !bDone; ++i)
+        bDone = selfTest.step(tick());
 
     EXPECT_TRUE(bDone);
 

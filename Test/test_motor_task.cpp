@@ -85,16 +85,42 @@ protected:
         }
     }
 
+    // Run enough ticks for MotorCtrl SETTLING (100) + MotorTask settle detection (100) + margin.
+    // If iSettlePos is given, set encoder to that position once motor enters SETTLING
+    // (so corrections see the correct position and resolve quickly).
+    void run_settle(int iExtra = 0) {
+        int iTotal = MotorCtrl::SETTLE_TICKS + MotorTask::SETTLE_STABLE_COUNT + 20 + iExtra;
+        for (int i = 0; i < iTotal; ++i)
+            task.run_once();
+    }
+
+    // Settle variant for backlash tests where encoder position may be outside DEADZONE
+    // of the motor target, causing infinite correction loops in mock (since mock encoder
+    // doesn't move with motor). Forces motor to IDLE via emergency_stop after SETTLING.
+    void run_settle_overshoot() {
+        // Phase 1: run through MotorCtrl SETTLING
+        for (int i = 0; i < MotorCtrl::SETTLE_TICKS + 5; ++i)
+            task.run_once();
+        // Motor may have started a correction move that can't complete in mock.
+        // Force it to IDLE so MotorTask can proceed with its own settle detection.
+        if (motor.get_state() != MOTOR_STATE_E::IDLE) {
+            motor.emergency_stop();
+        }
+        // Phase 2: MotorTask settle detection
+        for (int i = 0; i < MotorTask::SETTLE_STABLE_COUNT + 20; ++i)
+            task.run_once();
+    }
+
     void complete_homing() {
         task.start_homing();
         trigger_stall(); // FAST → RETRACT
         encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
         iAdcCurrent = 0;
-        for (int i = 0; i < 10; ++i) task.run_once();
+        for (int i = 0; i < 120; ++i) task.run_once();
         trigger_stall(); // SLOW → SETTLE
         encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
         iAdcCurrent = 0;
-        for (int i = 0; i < 10; ++i) task.run_once();
+        for (int i = 0; i < 120; ++i) task.run_once();
         drain_rsp();
     }
 };
@@ -124,7 +150,7 @@ TEST_F(MotorTaskTest, SetZoom_Arrived_TwoFrames) {
 
     int32_t iTarget = motor.get_target();
     encoder.set_position(iTarget);
-    for (int i = 0; i < 10; ++i) task.run_once();
+    run_settle();
 
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
 
@@ -167,7 +193,7 @@ TEST_F(MotorTaskTest, HomingRetract_DoneTriggersSlow) {
     trigger_stall(); // FAST → RETRACT
     encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
     iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
+    for (int i = 0; i < 120; ++i) task.run_once();
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_SLOW);
 }
 
@@ -176,7 +202,7 @@ TEST_F(MotorTaskTest, HomingSlow_StallTriggersSettle) {
     trigger_stall(); // FAST → RETRACT
     encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
     iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
+    for (int i = 0; i < 120; ++i) task.run_once();
     // Now in SLOW
     trigger_stall(); // SLOW → SETTLE
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_SETTLE);
@@ -188,11 +214,11 @@ TEST_F(MotorTaskTest, HomingSettle_Complete) {
     trigger_stall(); // FAST → RETRACT
     encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
     iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
+    for (int i = 0; i < 120; ++i) task.run_once();
     trigger_stall(); // SLOW → SETTLE
     encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
     iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
+    for (int i = 0; i < 120; ++i) task.run_once();
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
     EXPECT_TRUE(task.is_homing_done());
     auto rsps = drain_rsp();
@@ -214,11 +240,11 @@ TEST_F(MotorTaskTest, Homing_BacklashReenabledAfter) {
     trigger_stall();
     encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
     iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
+    for (int i = 0; i < 120; ++i) task.run_once();
     trigger_stall();
     encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
     iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
+    for (int i = 0; i < 120; ++i) task.run_once();
     EXPECT_TRUE(motor.is_backlash_enabled());
 }
 
@@ -431,11 +457,11 @@ TEST_F(MotorTaskTest, BacklashMeasure_StartsMovingToMid) {
     trigger_stall(); // FAST → RETRACT
     encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
     iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
+    for (int i = 0; i < 120; ++i) task.run_once();
     trigger_stall(); // SLOW → SETTLE
     encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
     iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
+    for (int i = 0; i < 120; ++i) task.run_once();
     drain_rsp();
 
     task.start_backlash_measure();
@@ -448,11 +474,11 @@ TEST_F(MotorTaskTest, BacklashMeasure_DisablesCompensation) {
     trigger_stall();
     encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
     iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
+    for (int i = 0; i < 120; ++i) task.run_once();
     trigger_stall();
     encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
     iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
+    for (int i = 0; i < 120; ++i) task.run_once();
     drain_rsp();
 
     motor.set_backlash_enabled(true);
@@ -465,59 +491,41 @@ TEST_F(MotorTaskTest, BacklashMeasure_FullCycle_SetsBacklash) {
     trigger_stall();
     encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
     iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
+    for (int i = 0; i < 120; ++i) task.run_once();
     trigger_stall();
     encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
     iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
+    for (int i = 0; i < 120; ++i) task.run_once();
     drain_rsp();
 
     task.start_backlash_measure();
 
-    // Arrive at mid
     encoder.set_position(MotorTask::BL_MEASURE_MID);
-    for (int i = 0; i < 10; ++i) task.run_once();
+    run_settle();
 
-    // 3 cycles of reverse-forward
     for (int cycle = 0; cycle < 3; ++cycle) {
-        // Reverse
         encoder.set_position(MotorTask::BL_MEASURE_MID - MotorTask::BL_REVERSE_DIST);
-        for (int i = 0; i < 10; ++i) task.run_once();
-        // Forward - simulate arriving slightly off (backlash effect)
-        // Error of ~80 counts per cycle
+        run_settle();
         encoder.set_position(MotorTask::BL_MEASURE_MID + 80);
-        for (int i = 0; i < 10; ++i) task.run_once();
+        run_settle_overshoot();
     }
 
-    // Should be back to IDLE with backlash set
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
-    // Average error = 80, minus DEADZONE(50) = 30
     EXPECT_EQ(motor.get_backlash(), 30);
 }
 
 TEST_F(MotorTaskTest, BacklashMeasure_ZeroError_BacklashIsZero) {
-    task.start_homing();
-    trigger_stall();
-    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
-    trigger_stall();
-    encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
-    drain_rsp();
-
+    complete_homing();
     task.start_backlash_measure();
 
     encoder.set_position(MotorTask::BL_MEASURE_MID);
-    for (int i = 0; i < 10; ++i) task.run_once();
+    run_settle();
 
     for (int cycle = 0; cycle < 3; ++cycle) {
         encoder.set_position(MotorTask::BL_MEASURE_MID - MotorTask::BL_REVERSE_DIST);
-        for (int i = 0; i < 10; ++i) task.run_once();
-        // No error - arrives exactly at reference
+        run_settle();
         encoder.set_position(MotorTask::BL_MEASURE_MID);
-        for (int i = 0; i < 10; ++i) task.run_once();
+        run_settle();
     }
 
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
@@ -542,23 +550,19 @@ TEST_F(MotorTaskTest, AccuracyTest_EnablesBacklash) {
     EXPECT_TRUE(motor.is_backlash_enabled());
 }
 
-TEST_F(MotorTaskTest, AccuracyTest_CompletesAfter3Trips) {
+TEST_F(MotorTaskTest, AccuracyTest_CompletesAfterAllTrips) {
     complete_homing();
-    motor.set_backlash(0);  // Simplify: no backlash overshoot in state machine test
+    motor.set_backlash(0);
     task.start_accuracy_test();
 
-    // Move to start
     encoder.set_position(MotorTask::ACC_START_POS);
-    for (int i = 0; i < 10; ++i) task.run_once();
+    run_settle();
 
-    // 3 round trips
-    for (int trip = 0; trip < 3; ++trip) {
-        // Forward to end
+    for (int trip = 0; trip < MotorTask::ACC_NUM_TRIPS; ++trip) {
         encoder.set_position(MotorTask::ACC_END_POS);
-        for (int i = 0; i < 10; ++i) task.run_once();
-        // Return to start
+        run_settle();
         encoder.set_position(MotorTask::ACC_START_POS);
-        for (int i = 0; i < 10; ++i) task.run_once();
+        run_settle();
     }
 
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
@@ -575,11 +579,11 @@ TEST_F(MotorTaskTest, HomingFullDiag_ChainsToBacklashMeasure) {
     trigger_stall(); // FAST -> RETRACT
     encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
     iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
+    for (int i = 0; i < 120; ++i) task.run_once();
     trigger_stall(); // SLOW -> SETTLE
     encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
     iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
+    for (int i = 0; i < 120; ++i) task.run_once();
 
     // Should chain to BACKLASH_MEASURE, not IDLE
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::BACKLASH_MEASURE);
@@ -591,11 +595,11 @@ TEST_F(MotorTaskTest, HomingNoDiag_GoesToIdle) {
     trigger_stall();
     encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
     iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
+    for (int i = 0; i < 120; ++i) task.run_once();
     trigger_stall();
     encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
     iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
+    for (int i = 0; i < 120; ++i) task.run_once();
 
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
 }
@@ -607,20 +611,20 @@ TEST_F(MotorTaskTest, FullDiag_ChainsBacklashToAccuracy) {
     trigger_stall();
     encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
     iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
+    for (int i = 0; i < 120; ++i) task.run_once();
     trigger_stall();
     encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
     iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
+    for (int i = 0; i < 120; ++i) task.run_once();
 
     // Now in BACKLASH_MEASURE - complete it
     encoder.set_position(MotorTask::BL_MEASURE_MID);
-    for (int i = 0; i < 10; ++i) task.run_once();
+    run_settle();
     for (int cycle = 0; cycle < 3; ++cycle) {
         encoder.set_position(MotorTask::BL_MEASURE_MID - MotorTask::BL_REVERSE_DIST);
-        for (int i = 0; i < 10; ++i) task.run_once();
+        run_settle();
         encoder.set_position(MotorTask::BL_MEASURE_MID);
-        for (int i = 0; i < 10; ++i) task.run_once();
+        run_settle();
     }
 
     // Should chain to ACCURACY_TEST
@@ -631,16 +635,14 @@ TEST_F(MotorTaskTest, BacklashMeasure_SavesBacklashToQueue) {
     complete_homing();
     task.start_backlash_measure();
 
-    // Arrive at mid
     encoder.set_position(MotorTask::BL_MEASURE_MID);
-    for (int i = 0; i < 10; ++i) task.run_once();
+    run_settle();
 
-    // 3 cycles of reverse-forward with 80-count error
     for (int cycle = 0; cycle < 3; ++cycle) {
         encoder.set_position(MotorTask::BL_MEASURE_MID - MotorTask::BL_REVERSE_DIST);
-        for (int i = 0; i < 10; ++i) task.run_once();
+        run_settle();
         encoder.set_position(MotorTask::BL_MEASURE_MID + 80);
-        for (int i = 0; i < 10; ++i) task.run_once();
+        run_settle_overshoot();
     }
 
     // Check save queue has backlash data
@@ -663,7 +665,7 @@ TEST_F(MotorTaskTest, SendSave_DefaultBacklashFieldsZero) {
 
     int32_t iTarget = motor.get_target();
     encoder.set_position(iTarget);
-    for (int i = 0; i < 10; ++i) task.run_once();
+    for (int i = 0; i < 120; ++i) task.run_once();
 
     SAVE_MESSAGE_S save;
     EXPECT_TRUE(receive_save(save));
@@ -680,11 +682,11 @@ TEST_F(MotorTaskTest, HomingCmd_Param1_FullDiag) {
     trigger_stall();
     encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
     iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
+    for (int i = 0; i < 120; ++i) task.run_once();
     trigger_stall();
     encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
     iAdcCurrent = 0;
-    for (int i = 0; i < 10; ++i) task.run_once();
+    for (int i = 0; i < 120; ++i) task.run_once();
     // Should chain to BACKLASH_MEASURE because param=1
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::BACKLASH_MEASURE);
 }
