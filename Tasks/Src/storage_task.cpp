@@ -67,7 +67,7 @@ void StorageTask::do_periodic_save() {
 
 void StorageTask::write_params() {
     m_stParams.magic_number = FramStorage::MAGIC;
-    m_stParams.version = 1;
+    m_stParams.version = 2;
     m_stParams.crc16 = FramStorage::calc_crc(m_stParams);
     m_pFram->save_params(m_stParams);
 }
@@ -86,7 +86,6 @@ extern "C" void storage_task_entry(void* params) {
     FRAM_PARAMS_S stParams;
     if (task.restore_params(stParams)) {
         g_Encoder.set_position(stParams.current_position);
-        g_ZoomTable.set_total_range(stParams.total_range);
     }
 
     TickType_t xLastWake = xTaskGetTickCount();

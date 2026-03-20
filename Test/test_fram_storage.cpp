@@ -61,3 +61,13 @@ TEST_F(FramStorageTest, CRC_Validation) {
     p.current_position = 200; // tamper
     EXPECT_FALSE(FramStorage::verify_crc(p));
 }
+
+TEST(FramParamsTest, V2_StructSize_Is60Bytes) {
+    EXPECT_EQ(sizeof(zlens::FRAM_PARAMS_S), 60u);
+}
+
+TEST(FramParamsTest, V2_BacklashFields_DefaultZero) {
+    zlens::FRAM_PARAMS_S stParams{};
+    EXPECT_EQ(stParams.backlash_counts, 0);
+    EXPECT_EQ(stParams.backlash_valid, 0);
+}

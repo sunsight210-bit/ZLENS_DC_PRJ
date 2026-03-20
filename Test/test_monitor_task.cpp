@@ -63,7 +63,6 @@ protected:
         p.current_zoom_x10 = 40; // 4.0x
         p.homing_done = 1;
         p.position_valid = 0xFF;
-        p.total_range = 346292;
         p.crc16 = FramStorage::calc_crc(p);
         // Set SPI rx buffer so load_params returns valid data
         const uint8_t* pBytes = reinterpret_cast<const uint8_t*>(&p);

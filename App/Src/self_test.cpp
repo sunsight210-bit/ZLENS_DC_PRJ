@@ -188,11 +188,9 @@ bool SelfTest::step(uint32_t iTick) {
         stParams.magic_number = FramStorage::MAGIC;
         stParams.version = 1;
         stParams.current_position = m_pEncoder->get_position();
-        stParams.total_range = m_iHomingTotalRange;
         stParams.homing_done = 1;
         stParams.position_valid = 0xFF;
         stParams.encoder_compensated = m_bEncoderReversed ? 1 : 0;
-        stParams.soft_limit_offset = 200; // matches MotorTask::SOFT_LIMIT_OFFSET
         bool bSaved = m_pFram->save_params(stParams);
         // Verify by reading back
         FRAM_PARAMS_S stVerify{};

@@ -18,8 +18,8 @@ struct FRAM_PARAMS_S {
     uint16_t current_zoom_x10;
     int32_t  min_position;
     int32_t  max_position;
-    int32_t  total_range;
-    uint16_t soft_limit_offset;
+    int16_t  backlash_counts;
+    uint8_t  backlash_valid;
     uint8_t  zero_reference;
     int32_t  z_offset;
     uint8_t  lens_type;
@@ -34,7 +34,7 @@ struct FRAM_PARAMS_S {
     uint8_t  last_save_reason;
     uint8_t  encoder_compensated;
     uint16_t motor_speed_khz;
-    uint8_t  reserved[11];
+    uint8_t  reserved[14];
     uint16_t crc16;
 };
 #pragma pack(pop)

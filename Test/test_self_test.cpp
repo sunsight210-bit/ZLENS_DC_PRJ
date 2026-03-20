@@ -291,7 +291,6 @@ TEST_F(SelfTestTest, FramSave_Pass) {
     stExpected.version = 1;
     stExpected.homing_done = 1;
     stExpected.position_valid = 0xFF;
-    stExpected.total_range = 346292;
     stExpected.crc16 = FramStorage::calc_crc(stExpected);
 
     std::vector<uint8_t> rx_data;
@@ -315,7 +314,6 @@ TEST_F(SelfTestTest, FullSequence_AllPass) {
     stExpected.version = 1;
     stExpected.homing_done = 1;
     stExpected.position_valid = 0xFF;
-    stExpected.total_range = 346292;
     stExpected.crc16 = FramStorage::calc_crc(stExpected);
 
     std::vector<uint8_t> rx_data;
