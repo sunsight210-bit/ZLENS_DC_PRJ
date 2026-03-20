@@ -107,7 +107,7 @@ void MotorTask::dispatch_command(const CMD_MESSAGE_S& stCmd) {
     case cmd::HOMING:
         if (m_eTaskState != TASK_STATE_E::IDLE) break;
         m_pSm->transition_to(SYSTEM_STATE_E::HOMING);
-        start_homing();
+        start_homing(stCmd.param == 1);
         break;
     case cmd::FORCE_STOP:
         m_pMotor->emergency_stop();
@@ -219,11 +219,18 @@ void MotorTask::process_homing() {
             send_response(rsp_cmd::ZOOM, iZoom);
             send_response(rsp_cmd::HOMING_DONE, rsp::HOMING_DONE_PARAM);
             send_save(save_reason::ARRIVED);
-            m_eTaskState = TASK_STATE_E::IDLE;
-            m_pSm->transition_to(SYSTEM_STATE_E::READY);
+
+            if (m_bFullDiagnostics) {
+                // Chain: homing → backlash measurement
+                start_backlash_measure();
+            } else {
+                m_eTaskState = TASK_STATE_E::IDLE;
+                m_pSm->transition_to(SYSTEM_STATE_E::READY);
+            }
 #ifndef BUILD_TESTING
-            swo_printf("[PASS] Homing complete: pos=%ld\n",
-                       static_cast<long>(m_pEncoder->get_position()));
+            swo_printf("[PASS] Homing complete: pos=%ld fullDiag=%d\n",
+                       static_cast<long>(m_pEncoder->get_position()),
+                       m_bFullDiagnostics ? 1 : 0);
 #endif
         }
         break;
@@ -451,8 +458,14 @@ void MotorTask::process_backlash_measure() {
             m_pMotor->set_backlash(iBacklash);
             m_pMotor->set_speed_limit(MotorCtrl::MAX_SPEED);
             m_pStall->reset();
-            m_eTaskState = TASK_STATE_E::IDLE;
-            m_pSm->transition_to(SYSTEM_STATE_E::READY);
+
+            if (m_bFullDiagnostics) {
+                // Chain: backlash measurement → accuracy test
+                start_accuracy_test();
+            } else {
+                m_eTaskState = TASK_STATE_E::IDLE;
+                m_pSm->transition_to(SYSTEM_STATE_E::READY);
+            }
         }
         break;
     }

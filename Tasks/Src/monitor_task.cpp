@@ -84,8 +84,8 @@ void MonitorTask::run_once() {
                     m_bSelfTestActive = false;
                     m_bSelfTestPassed = m_SelfTest.get_result().bAllPassed;
                     if (m_bSelfTestPassed) {
-                        // Trigger homing after successful self-test
-                        CMD_MESSAGE_S stCmd = {cmd::HOMING, 0};
+                        // Trigger homing with full diagnostics chain
+                        CMD_MESSAGE_S stCmd = {cmd::HOMING, 1};
                         xQueueSend(g_cmdQueue, &stCmd, 0);
                         m_pSm->transition_to(SYSTEM_STATE_E::HOMING);
                     } else {

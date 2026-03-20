@@ -563,3 +563,84 @@ TEST_F(MotorTaskTest, AccuracyTest_CompletesAfter3Trips) {
 
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
 }
+
+// ============================================================
+// 0x60 Full Diagnostics Chain (Task 8)
+// ============================================================
+
+TEST_F(MotorTaskTest, HomingFullDiag_ChainsToBacklashMeasure) {
+    sm.transition_to(SYSTEM_STATE_E::HOMING);
+    task.start_homing(true);  // full diagnostics
+    // Complete homing
+    trigger_stall(); // FAST -> RETRACT
+    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 10; ++i) task.run_once();
+    trigger_stall(); // SLOW -> SETTLE
+    encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 10; ++i) task.run_once();
+
+    // Should chain to BACKLASH_MEASURE, not IDLE
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::BACKLASH_MEASURE);
+}
+
+TEST_F(MotorTaskTest, HomingNoDiag_GoesToIdle) {
+    sm.transition_to(SYSTEM_STATE_E::HOMING);
+    task.start_homing(false);  // no diagnostics
+    trigger_stall();
+    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 10; ++i) task.run_once();
+    trigger_stall();
+    encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 10; ++i) task.run_once();
+
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
+}
+
+TEST_F(MotorTaskTest, FullDiag_ChainsBacklashToAccuracy) {
+    sm.transition_to(SYSTEM_STATE_E::HOMING);
+    task.start_homing(true);
+    // Complete homing
+    trigger_stall();
+    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 10; ++i) task.run_once();
+    trigger_stall();
+    encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 10; ++i) task.run_once();
+
+    // Now in BACKLASH_MEASURE - complete it
+    encoder.set_position(MotorTask::BL_MEASURE_MID);
+    for (int i = 0; i < 10; ++i) task.run_once();
+    for (int cycle = 0; cycle < 3; ++cycle) {
+        encoder.set_position(MotorTask::BL_MEASURE_MID - MotorTask::BL_REVERSE_DIST);
+        for (int i = 0; i < 10; ++i) task.run_once();
+        encoder.set_position(MotorTask::BL_MEASURE_MID);
+        for (int i = 0; i < 10; ++i) task.run_once();
+    }
+
+    // Should chain to ACCURACY_TEST
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::ACCURACY_TEST);
+}
+
+TEST_F(MotorTaskTest, HomingCmd_Param1_FullDiag) {
+    sm.transition_to(SYSTEM_STATE_E::HOMING);
+    send_cmd(cmd::HOMING, 1);  // param=1 -> full diagnostics
+    task.run_once();
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_FAST);
+    // Complete homing
+    trigger_stall();
+    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 10; ++i) task.run_once();
+    trigger_stall();
+    encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 10; ++i) task.run_once();
+    // Should chain to BACKLASH_MEASURE because param=1
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::BACKLASH_MEASURE);
+}
