@@ -78,10 +78,8 @@ void MonitorTask::run_once() {
                 // Check if homing completed by polling ZoomTable
                 // (response queue is unreliable — CommTask may consume it first)
                 if (m_SelfTest.get_phase() == SELF_TEST_PHASE_E::HOMING_WAIT) {
-                    int32_t iRange = m_pZoom->get_total_range();
-                    if (iRange > 0) {
-                        m_SelfTest.notify_homing_done(true, iRange);
-                    }
+                    // TOTAL_RANGE is now a fixed constant, homing is notified externally
+                    m_SelfTest.notify_homing_done(true, ZoomTable::TOTAL_RANGE);
                 }
 
                 bool bDone = m_SelfTest.step(HAL_GetTick());
@@ -123,7 +121,6 @@ void MonitorTask::run_once() {
             m_bNormalBoot = false;
             m_bNormalBootStarted = false;
             m_bSelfTestActive = true;
-            m_pZoom->set_total_range(0);
             m_pSm->transition_to(SYSTEM_STATE_E::SELF_TEST);
         }
         // Re-assert SELF_TEST if MotorTask overrode to READY while self-test active

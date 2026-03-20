@@ -94,7 +94,7 @@ TEST_F(MonitorTaskTest, FirstBoot_SelfTest_VoltageFail_Error) {
 TEST_F(MonitorTaskTest, NormalBoot_SkipsSelfTest) {
     prepare_valid_fram();
     encoder.set_position(50000);
-    zoom.set_total_range(346292);
+
     sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
 
     task.run_once(); // boot decision: FRAM valid -> normal boot -> READY
@@ -108,7 +108,7 @@ TEST_F(MonitorTaskTest, NormalBoot_SkipsSelfTest) {
 TEST_F(MonitorTaskTest, NormalBoot_RestoresPosition) {
     prepare_valid_fram();
     encoder.set_position(50000);
-    zoom.set_total_range(346292);
+
     sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
 
     task.run_once();
@@ -121,7 +121,7 @@ TEST_F(MonitorTaskTest, NormalBoot_MovesToNearestZoom) {
     prepare_valid_fram();
     // Position far from any zoom table entry
     encoder.set_position(100000);
-    zoom.set_total_range(346292);
+
     sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
 
     task.run_once();
@@ -138,7 +138,7 @@ TEST_F(MonitorTaskTest, NormalBoot_MovesToNearestZoom) {
 TEST_F(MonitorTaskTest, NormalBoot_NoMoveWhenCloseToZoom) {
     prepare_valid_fram();
     // Position exactly at a zoom entry
-    zoom.set_total_range(346292);
+
     int32_t iExactPos = zoom.get_position(zoom.get_min_zoom());
     encoder.set_position(iExactPos);
     sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
@@ -158,7 +158,7 @@ TEST_F(MonitorTaskTest, UartSelfTestReq_TriggersRetest) {
     // First: get to READY state via normal boot
     prepare_valid_fram();
     encoder.set_position(50000);
-    zoom.set_total_range(346292);
+
     sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
     task.run_once(); // normal boot -> READY
     EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::READY);

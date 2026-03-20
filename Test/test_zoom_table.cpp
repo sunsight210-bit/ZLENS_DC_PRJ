@@ -12,7 +12,7 @@ protected:
         mock::get_log().reset();
         table.init();
         table.load_defaults();
-        table.set_total_range(206821);
+        // TOTAL_RANGE is now a fixed constant (214648)
     }
 };
 
@@ -79,14 +79,26 @@ TEST_F(ZoomTableTest, SetEntry_FactoryMode) {
 }
 
 TEST_F(ZoomTableTest, AngleToPositionConversion) {
-    table.set_total_range(206821);
     table.erase_all();
     table.set_entry(25, 18000);
     int32_t pos = table.get_position(25);
-    EXPECT_NEAR(pos, 103410, 2);
+    // 18000 * 214648 / 36000 = 107324
+    EXPECT_NEAR(pos, 107324, 2);
 }
 
 TEST_F(ZoomTableTest, MinMaxZoom) {
     EXPECT_EQ(table.get_min_zoom(), 6);
     EXPECT_EQ(table.get_max_zoom(), 70);
+}
+
+TEST_F(ZoomTableTest, TotalRange_IsFixedConstant) {
+    ZoomTable zt;
+    zt.init();
+    zt.load_defaults();
+    // 0.6x at 0° should map to position 0
+    EXPECT_EQ(zt.get_position(6), 0);
+    // 7.0x at 347° should map to ~206821 (34700 * 214648 / 36000)
+    int32_t iPos70 = zt.get_position(70);
+    EXPECT_GT(iPos70, 205000);
+    EXPECT_LT(iPos70, 210000);
 }

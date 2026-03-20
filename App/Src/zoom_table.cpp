@@ -25,7 +25,6 @@ static const ZOOM_ENTRY_S kDefaultTable[] = {
 
 void ZoomTable::init() {
     m_iCount = 0;
-    m_iTotalRange = 0;
     std::memset(m_aEntries, 0, sizeof(m_aEntries));
 }
 
@@ -35,9 +34,8 @@ void ZoomTable::load_defaults() {
 }
 
 int ZoomTable::angle_to_position(uint16_t angle_x100) const {
-    if (m_iTotalRange == 0) return 0;
     return static_cast<int>(
-        static_cast<int64_t>(angle_x100) * m_iTotalRange / 36000
+        static_cast<int64_t>(angle_x100) * TOTAL_RANGE / 36000
     );
 }
 

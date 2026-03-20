@@ -207,7 +207,6 @@ void MotorTask::process_homing() {
     case TASK_STATE_E::HOMING_TO_SOFT_MIN:
         if (m_pMotor->get_state() == MOTOR_STATE_E::IDLE) {
             // Homing complete
-            m_pZoom->set_total_range(m_iTotalRange);
             m_bHomingDone = true;
             m_pStall->reset();
             int32_t iPos = m_pEncoder->get_position();
@@ -271,7 +270,6 @@ void MotorTask::handle_stall() {
             m_iTotalRange = m_iTotalRange - iActualPos + SOFT_LIMIT_OFFSET;
             m_pEncoder->set_position(SOFT_LIMIT_OFFSET);
         }
-        m_pZoom->set_total_range(m_iTotalRange);
         m_bHomingDone = true;
         m_pStall->reset();
         {
@@ -438,11 +436,9 @@ void MotorTask::send_save(uint8_t reason) {
 }
 
 int32_t MotorTask::clamp_to_soft_limits(int32_t iTarget) const {
-    // After homing: use discovered range; before homing: fallback to
-    // ZoomTable's range (restored from FRAM by StorageTask at boot)
+    // After homing: use discovered range; before homing: use fixed constant
     int32_t iTotalRange = m_bHomingDone ? m_iTotalRange
-                                        : m_pZoom->get_total_range();
-    if (iTotalRange == 0) return iTarget;
+                                        : ZoomTable::TOTAL_RANGE;
     int32_t iMin = SOFT_LIMIT_OFFSET;
     int32_t iMax = iTotalRange - SOFT_LIMIT_OFFSET;
     if (iTarget < iMin) return iMin;

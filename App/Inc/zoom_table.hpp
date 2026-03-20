@@ -12,6 +12,7 @@ struct ZOOM_ENTRY_S {
 class ZoomTable {
 public:
     static constexpr uint8_t MAX_ENTRIES = 32;
+    static constexpr int32_t TOTAL_RANGE = 214648;
 
     void init();
     void load_defaults();
@@ -29,10 +30,6 @@ public:
     void erase_all();
     uint8_t get_entry_count() const { return m_iCount; }
 
-    // Calibration
-    void set_total_range(int32_t range) { m_iTotalRange = range; }
-    int32_t get_total_range() const { return m_iTotalRange; }
-
     // Flash persistence
     bool save_to_flash();
     bool load_from_flash();
@@ -40,7 +37,6 @@ public:
 private:
     ZOOM_ENTRY_S m_aEntries[MAX_ENTRIES];
     uint8_t m_iCount = 0;
-    int32_t m_iTotalRange = 0;
 
     int angle_to_position(uint16_t angle_x100) const;
     int find_index(uint16_t zoom_x10) const;

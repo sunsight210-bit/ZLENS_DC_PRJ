@@ -96,7 +96,7 @@ TEST_F(MotorTaskTest, Init_StateIsIdle) {
 // ============================================================
 
 TEST_F(MotorTaskTest, SetZoom_StartsMotor) {
-    zoom.set_total_range(100000);
+
     send_cmd(cmd::SET_ZOOM, 60);
     task.run_once();
 
@@ -105,7 +105,7 @@ TEST_F(MotorTaskTest, SetZoom_StartsMotor) {
 }
 
 TEST_F(MotorTaskTest, SetZoom_Arrived_TwoFrames) {
-    zoom.set_total_range(100000);
+
     send_cmd(cmd::SET_ZOOM, 60);
     task.run_once();
 
@@ -168,7 +168,7 @@ TEST_F(MotorTaskTest, HomingComplete_TwoFrames) {
 // ============================================================
 
 TEST_F(MotorTaskTest, ForceStop_CmdIs0x02) {
-    zoom.set_total_range(100000);
+
     send_cmd(cmd::SET_ZOOM, 60);
     task.run_once();
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::MOVING);
@@ -187,7 +187,7 @@ TEST_F(MotorTaskTest, ForceStop_CmdIs0x02) {
 // ============================================================
 
 TEST_F(MotorTaskTest, StallDetected_Response0xE1) {
-    zoom.set_total_range(100000);
+
     send_cmd(cmd::SET_ZOOM, 60);
     task.run_once();
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::MOVING);
@@ -206,7 +206,7 @@ TEST_F(MotorTaskTest, StallDetected_Response0xE1) {
 // ============================================================
 
 TEST_F(MotorTaskTest, OvercurrentDetected_Response0xE2) {
-    zoom.set_total_range(100000);
+
     send_cmd(cmd::SET_ZOOM, 60);
     task.run_once();
 
@@ -224,7 +224,7 @@ TEST_F(MotorTaskTest, OvercurrentDetected_Response0xE2) {
 // ============================================================
 
 TEST_F(MotorTaskTest, ZoomInc_RelativeIncrease) {
-    zoom.set_total_range(100000);
+
     // Set current position at zoom 10 (1.0x)
     int32_t iPos10 = zoom.get_position(10);
     encoder.set_position(iPos10);
@@ -236,7 +236,7 @@ TEST_F(MotorTaskTest, ZoomInc_RelativeIncrease) {
 }
 
 TEST_F(MotorTaskTest, ZoomInc_ClampToMax) {
-    zoom.set_total_range(100000);
+
     // Set position at a mid zoom, increment beyond max
     int32_t iPos50 = zoom.get_position(50); // 5.0x
     encoder.set_position(iPos50);
@@ -257,7 +257,7 @@ TEST_F(MotorTaskTest, ZoomInc_ClampToMax) {
 // ============================================================
 
 TEST_F(MotorTaskTest, ZoomDec_RelativeDecrease) {
-    zoom.set_total_range(100000);
+
     int32_t iPos60 = zoom.get_position(60);
     encoder.set_position(iPos60);
 
@@ -268,7 +268,7 @@ TEST_F(MotorTaskTest, ZoomDec_RelativeDecrease) {
 }
 
 TEST_F(MotorTaskTest, ZoomDec_ClampToMin) {
-    zoom.set_total_range(100000);
+
     // Set position at a mid zoom, decrement beyond min
     int32_t iPos50 = zoom.get_position(50); // 5.0x
     encoder.set_position(iPos50);
@@ -289,14 +289,14 @@ TEST_F(MotorTaskTest, ZoomDec_ClampToMin) {
 // ============================================================
 
 TEST_F(MotorTaskTest, CycleStart_CmdIs0x30) {
-    zoom.set_total_range(100000);
+
     send_cmd(cmd::CYCLE_START, 0x0105); // step=1, dwell=5
     task.run_once();
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::CYCLING);
 }
 
 TEST_F(MotorTaskTest, CycleStop_CmdIs0x31) {
-    zoom.set_total_range(100000);
+
     task.start_cycle(1, 1);
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::CYCLING);
 
@@ -386,7 +386,7 @@ TEST_F(MotorTaskTest, SoftLimit_ClampsTarget) {
 // ============================================================
 
 TEST_F(MotorTaskTest, PowerDown_EmergencyStop) {
-    zoom.set_total_range(100000);
+
     send_cmd(cmd::SET_ZOOM, 60);
     task.run_once();
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::MOVING);
@@ -426,13 +426,13 @@ TEST_F(MotorTaskTest, PowerDown_SetsSpiEmergency) {
 // ============================================================
 
 TEST_F(MotorTaskTest, CycleZoom_StepsThrough) {
-    zoom.set_total_range(100000);
+
     task.start_cycle(1, 1);
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::CYCLING);
 }
 
 TEST_F(MotorTaskTest, CycleZoom_ReversesAtLimit) {
-    zoom.set_total_range(100000);
+
     encoder.set_position(99000);
     task.start_cycle(1, 1);
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::CYCLING);
