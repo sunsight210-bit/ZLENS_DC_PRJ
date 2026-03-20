@@ -403,3 +403,110 @@ TEST_F(MotorTaskTest, CycleZoom_ReversesAtLimit) {
     task.start_cycle(1, 1);
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::CYCLING);
 }
+
+// ============================================================
+// Backlash Measurement (Task 6)
+// ============================================================
+
+// Helper: complete_homing is defined as a fixture method above
+// (We add it to the fixture class via a lambda-like approach in each test,
+//  but since we can't modify the fixture easily, we use a local helper.)
+
+TEST_F(MotorTaskTest, BacklashMeasure_StartsMovingToMid) {
+    // Complete homing first
+    task.start_homing();
+    trigger_stall(); // FAST → RETRACT
+    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 10; ++i) task.run_once();
+    trigger_stall(); // SLOW → SETTLE
+    encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 10; ++i) task.run_once();
+    drain_rsp();
+
+    task.start_backlash_measure();
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::BACKLASH_MEASURE);
+    EXPECT_EQ(motor.get_target(), MotorTask::BL_MEASURE_MID);
+}
+
+TEST_F(MotorTaskTest, BacklashMeasure_DisablesCompensation) {
+    task.start_homing();
+    trigger_stall();
+    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 10; ++i) task.run_once();
+    trigger_stall();
+    encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 10; ++i) task.run_once();
+    drain_rsp();
+
+    motor.set_backlash_enabled(true);
+    task.start_backlash_measure();
+    EXPECT_FALSE(motor.is_backlash_enabled());
+}
+
+TEST_F(MotorTaskTest, BacklashMeasure_FullCycle_SetsBacklash) {
+    task.start_homing();
+    trigger_stall();
+    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 10; ++i) task.run_once();
+    trigger_stall();
+    encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 10; ++i) task.run_once();
+    drain_rsp();
+
+    task.start_backlash_measure();
+
+    // Arrive at mid
+    encoder.set_position(MotorTask::BL_MEASURE_MID);
+    for (int i = 0; i < 10; ++i) task.run_once();
+
+    // 3 cycles of reverse-forward
+    for (int cycle = 0; cycle < 3; ++cycle) {
+        // Reverse
+        encoder.set_position(MotorTask::BL_MEASURE_MID - MotorTask::BL_REVERSE_DIST);
+        for (int i = 0; i < 10; ++i) task.run_once();
+        // Forward - simulate arriving slightly off (backlash effect)
+        // Error of ~80 counts per cycle
+        encoder.set_position(MotorTask::BL_MEASURE_MID + 80);
+        for (int i = 0; i < 10; ++i) task.run_once();
+    }
+
+    // Should be back to IDLE with backlash set
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
+    // Average error = 80, minus DEADZONE(50) = 30
+    EXPECT_EQ(motor.get_backlash(), 30);
+}
+
+TEST_F(MotorTaskTest, BacklashMeasure_ZeroError_BacklashIsZero) {
+    task.start_homing();
+    trigger_stall();
+    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 10; ++i) task.run_once();
+    trigger_stall();
+    encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 10; ++i) task.run_once();
+    drain_rsp();
+
+    task.start_backlash_measure();
+
+    encoder.set_position(MotorTask::BL_MEASURE_MID);
+    for (int i = 0; i < 10; ++i) task.run_once();
+
+    for (int cycle = 0; cycle < 3; ++cycle) {
+        encoder.set_position(MotorTask::BL_MEASURE_MID - MotorTask::BL_REVERSE_DIST);
+        for (int i = 0; i < 10; ++i) task.run_once();
+        // No error - arrives exactly at reference
+        encoder.set_position(MotorTask::BL_MEASURE_MID);
+        for (int i = 0; i < 10; ++i) task.run_once();
+    }
+
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
+    EXPECT_EQ(motor.get_backlash(), 0);
+}

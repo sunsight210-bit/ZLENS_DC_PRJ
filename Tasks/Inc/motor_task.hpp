@@ -39,6 +39,12 @@ public:
     static constexpr uint16_t HOMING_FAST_SPEED = MotorCtrl::MAX_SPEED / 2;
     static constexpr uint16_t HOMING_SLOW_SPEED = MotorCtrl::MIN_SPEED;
 
+    // Backlash measurement constants
+    static constexpr int32_t BL_MEASURE_MID = 107000;
+    static constexpr int32_t BL_REVERSE_DIST = 4096;
+
+    void start_backlash_measure();
+
 private:
     MotorCtrl* m_pMotor = nullptr;
     Encoder* m_pEncoder = nullptr;
@@ -64,10 +70,20 @@ private:
     uint16_t m_iCurrentZoom = 0;
     bool m_bCycleWaiting = false;
 
+    // Backlash measurement sub-states
+    enum class BL_MEASURE_PHASE_E : uint8_t {
+        MOVE_TO_MID, REVERSE, FORWARD
+    };
+    BL_MEASURE_PHASE_E m_eBLPhase = BL_MEASURE_PHASE_E::MOVE_TO_MID;
+    int32_t m_iBLRefPos = 0;
+    int32_t m_aBLSamples[3] = {};
+    uint8_t m_iBLSampleIdx = 0;
+
     void dispatch_command(const CMD_MESSAGE_S& stCmd);
     void process_moving();
     void process_homing();
     void process_cycling();
+    void process_backlash_measure();
     void handle_stall();
     void handle_overcurrent();
     void handle_power_down();

@@ -76,6 +76,9 @@ void MotorTask::run_once() {
     case TASK_STATE_E::CYCLING:
         process_cycling();
         break;
+    case TASK_STATE_E::BACKLASH_MEASURE:
+        process_backlash_measure();
+        break;
     default:
         break;
     }
@@ -388,6 +391,68 @@ void MotorTask::process_cycling() {
             m_iCycleDwellCount = 0;
             m_pStall->reset();
         }
+    }
+}
+
+void MotorTask::start_backlash_measure() {
+    m_pMotor->set_backlash_enabled(false);
+    m_pMotor->set_speed_limit(HOMING_SLOW_SPEED);
+    m_eBLPhase = BL_MEASURE_PHASE_E::MOVE_TO_MID;
+    m_iBLSampleIdx = 0;
+    m_eTaskState = TASK_STATE_E::BACKLASH_MEASURE;
+    m_pStall->set_direction(StallDetect::Direction::FORWARD);
+    m_pStall->start_motor();
+    m_pMotor->move_to(BL_MEASURE_MID);
+}
+
+void MotorTask::process_backlash_measure() {
+    if (m_pMotor->get_state() != MOTOR_STATE_E::IDLE) return;
+
+    switch (m_eBLPhase) {
+    case BL_MEASURE_PHASE_E::MOVE_TO_MID:
+        // Arrived at middle, record reference position
+        m_iBLRefPos = m_pEncoder->get_position();
+        m_eBLPhase = BL_MEASURE_PHASE_E::REVERSE;
+        m_pStall->set_direction(StallDetect::Direction::REVERSE);
+        m_pStall->start_motor();
+        m_pMotor->move_to(m_iBLRefPos - BL_REVERSE_DIST);
+        break;
+
+    case BL_MEASURE_PHASE_E::REVERSE:
+        // Reversed, now go forward back to reference
+        m_eBLPhase = BL_MEASURE_PHASE_E::FORWARD;
+        m_pStall->set_direction(StallDetect::Direction::FORWARD);
+        m_pStall->start_motor();
+        m_pMotor->move_to(m_iBLRefPos);
+        break;
+
+    case BL_MEASURE_PHASE_E::FORWARD: {
+        // Arrived, measure error
+        int32_t iActual = m_pEncoder->get_position();
+        int32_t iError = iActual - m_iBLRefPos;
+        if (iError < 0) iError = -iError;
+        m_aBLSamples[m_iBLSampleIdx++] = iError;
+
+        if (m_iBLSampleIdx < 3) {
+            // Next cycle: reverse again
+            m_eBLPhase = BL_MEASURE_PHASE_E::REVERSE;
+            m_pStall->set_direction(StallDetect::Direction::REVERSE);
+            m_pStall->start_motor();
+            m_pMotor->move_to(m_iBLRefPos - BL_REVERSE_DIST);
+        } else {
+            // Calculate average backlash, subtract DEADZONE
+            int32_t iSum = m_aBLSamples[0] + m_aBLSamples[1] + m_aBLSamples[2];
+            int32_t iAvg = iSum / 3;
+            int16_t iBacklash = static_cast<int16_t>(
+                iAvg > MotorCtrl::DEADZONE ? iAvg - MotorCtrl::DEADZONE : 0);
+            m_pMotor->set_backlash(iBacklash);
+            m_pMotor->set_speed_limit(MotorCtrl::MAX_SPEED);
+            m_pStall->reset();
+            m_eTaskState = TASK_STATE_E::IDLE;
+            m_pSm->transition_to(SYSTEM_STATE_E::READY);
+        }
+        break;
+    }
     }
 }
 
