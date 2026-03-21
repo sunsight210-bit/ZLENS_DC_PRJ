@@ -11,17 +11,22 @@
 
 namespace zlens {
 
-enum class MOTOR_STATE_E { IDLE, ACCELERATING, CONSTANT, DECELERATING, BRAKING, STALLED, APPROACHING };
+enum class MOTOR_STATE_E { IDLE, ACCELERATING, CONSTANT, DECELERATING, BRAKING, STALLED, APPROACHING, SETTLING };
 enum class DIRECTION_E { FORWARD, REVERSE };
 
 class MotorCtrl {
 public:
     static constexpr uint16_t PWM_ARR = 4266;
-    static constexpr uint16_t MAX_SPEED = 3600;    // ~75% duty
+    static constexpr uint16_t MAX_SPEED = 2400;    // ~56% duty — avoid overcurrent
     static constexpr uint16_t MIN_SPEED = 480;     // ~10% duty
     static constexpr uint16_t ACCEL_STEP = 10;     // PWM increment per ms
-    static constexpr int32_t  DEADZONE = 50;       // +/-50 counts
-    static constexpr int32_t  DECEL_DISTANCE = 5000;
+    static constexpr int32_t  DEADZONE = 1000;      // +/-1000 counts (matches gearbox play)
+    static constexpr int32_t  FINE_DEADZONE = 100;  // Phase2 fine positioning deadzone
+    static constexpr int32_t  DECEL_DISTANCE = 15000;
+    static constexpr uint16_t SETTLE_TICKS = 100;   // 100ms settle after brake
+    static constexpr uint8_t  MAX_CORRECTIONS = 1;
+    static constexpr uint16_t MIN_CORRECTION_SPEED = 480;   // ~11% duty, VREF=2V
+    static constexpr int32_t  BACKLASH_MARGIN = 200;        // overshoot margin for backlash compensation
 
     void init(TIM_HandleTypeDef* htim, DAC_HandleTypeDef* hdac, Encoder* encoder);
     void move_to(int32_t target);
@@ -29,7 +34,7 @@ public:
     void emergency_stop();
     void update();
 
-    void set_current_limit(uint16_t milliamps);
+    void set_vref_mv(uint16_t mv);
     MOTOR_STATE_E get_state() const { return m_eState; }
     DIRECTION_E get_direction() const { return m_eDirection; }
     uint16_t get_current_speed() const { return m_iCurrentSpeed; }
@@ -58,10 +63,14 @@ private:
     int16_t m_iBacklash = 200;
     bool m_bBacklashEnabled = false;
     int32_t m_iFinalTarget = 0;
+    uint16_t m_iSettleCount = 0;
+    uint8_t m_iCorrectionCount = 0;
+    bool m_bPhase2Active = false;
 
     void set_pwm(DIRECTION_E dir, uint16_t speed);
     void brake();
     void coast();
+    void start_correction();
 };
 
 } // namespace zlens
