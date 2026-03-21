@@ -828,7 +828,7 @@ extern "C" void motor_task_entry(void* params) {
         task.run_once();
 
         // Heartbeat every 5s
-        if (++iHeartbeat >= HEARTBEAT_INTERVAL) {
+        if (++iHeartbeat >= MotorTask::HEARTBEAT_INTERVAL) {
             iHeartbeat = 0;
             swo_printf("[MOTOR] HB state=%d motor=%d pos=%ld\n",
                        (int)task.get_state(),
