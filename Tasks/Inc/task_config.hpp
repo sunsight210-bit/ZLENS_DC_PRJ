@@ -121,4 +121,11 @@ extern QueueHandle_t g_saveQueue;
 extern volatile bool g_bSpiEmergency;
 extern volatile bool g_bUartSelfTestReq;
 
+// --- Homing mechanical parameters ---
+namespace homing {
+    constexpr int32_t RETRACT_DISTANCE = 4096;     // 粗定位后回退距离
+    constexpr int32_t SETTLE_DISTANCE  = 2048;     // 归零稳定偏移 (= ZoomTable::HOME_OFFSET)
+    constexpr int32_t FAR_DISTANCE     = 1000000;  // 归零远距离移动
+} // namespace homing
+
 } // namespace zlens
