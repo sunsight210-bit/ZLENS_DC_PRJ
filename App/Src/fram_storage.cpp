@@ -1,5 +1,6 @@
 // App/Src/fram_storage.cpp
 #include "fram_storage.hpp"
+#include "hw_constants.hpp"
 #include "crc16.hpp"
 #include <cstddef>
 #include <cstring>
@@ -12,24 +13,24 @@ void FramStorage::init(SPI_HandleTypeDef* hspi) {
 }
 
 void FramStorage::cs_low() {
-    HAL_GPIO_WritePin(GPIOB, 1 << 12, GPIO_PIN_RESET); // PB12
+    HAL_GPIO_WritePin(GPIOB, hw::FRAM_CS_PIN, GPIO_PIN_RESET); // PB12
 }
 
 void FramStorage::cs_high() {
-    HAL_GPIO_WritePin(GPIOB, 1 << 12, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(GPIOB, hw::FRAM_CS_PIN, GPIO_PIN_SET);
 }
 
 void FramStorage::write_disable_wp() {
-    HAL_GPIO_WritePin(GPIOB, 1 << 11, GPIO_PIN_SET); // PB11 WP high = write enabled
+    HAL_GPIO_WritePin(GPIOB, hw::FRAM_WP_PIN, GPIO_PIN_SET); // PB11 WP high = write enabled
 }
 
 void FramStorage::enable_wp() {
-    HAL_GPIO_WritePin(GPIOB, 1 << 11, GPIO_PIN_RESET); // PB11 WP low = protected
+    HAL_GPIO_WritePin(GPIOB, hw::FRAM_WP_PIN, GPIO_PIN_RESET); // PB11 WP low = protected
 }
 
 void FramStorage::write_enable() {
     cs_low();
-    uint8_t cmd = 0x06; // WREN
+    uint8_t cmd = hw::FRAM_CMD_WREN;
     HAL_SPI_Transmit(m_pHspi, &cmd, 1, 100);
     cs_high();
 }
@@ -38,7 +39,7 @@ void FramStorage::spi_write(uint16_t addr, const uint8_t* data, uint16_t len) {
     write_disable_wp();
     write_enable();
     cs_low();
-    uint8_t hdr[3] = {0x02, static_cast<uint8_t>(addr >> 8), static_cast<uint8_t>(addr & 0xFF)};
+    uint8_t hdr[3] = {hw::FRAM_CMD_WRITE, static_cast<uint8_t>(addr >> 8), static_cast<uint8_t>(addr & 0xFF)};
     HAL_SPI_Transmit(m_pHspi, hdr, 3, 100);
     HAL_SPI_Transmit(m_pHspi, const_cast<uint8_t*>(data), len, 100);
     cs_high();
@@ -47,7 +48,7 @@ void FramStorage::spi_write(uint16_t addr, const uint8_t* data, uint16_t len) {
 
 void FramStorage::spi_read(uint16_t addr, uint8_t* data, uint16_t len) {
     cs_low();
-    uint8_t hdr[3] = {0x03, static_cast<uint8_t>(addr >> 8), static_cast<uint8_t>(addr & 0xFF)};
+    uint8_t hdr[3] = {hw::FRAM_CMD_READ, static_cast<uint8_t>(addr >> 8), static_cast<uint8_t>(addr & 0xFF)};
     HAL_SPI_Transmit(m_pHspi, hdr, 3, 100);
     HAL_SPI_Receive(m_pHspi, data, len, 100);
     cs_high();
@@ -92,7 +93,7 @@ void FramStorage::emergency_save(int32_t position) {
     cs_low();
 
     uint16_t pos_addr = PRIMARY_ADDR + offsetof(FRAM_PARAMS_S, current_position);
-    uint8_t hdr[3] = {0x02, static_cast<uint8_t>(pos_addr >> 8), static_cast<uint8_t>(pos_addr & 0xFF)};
+    uint8_t hdr[3] = {hw::FRAM_CMD_WRITE, static_cast<uint8_t>(pos_addr >> 8), static_cast<uint8_t>(pos_addr & 0xFF)};
     HAL_SPI_Transmit(m_pHspi, hdr, 3, 100);
 
     // Write position (4 bytes)
@@ -103,7 +104,7 @@ void FramStorage::emergency_save(int32_t position) {
     uint16_t valid_addr = PRIMARY_ADDR + offsetof(FRAM_PARAMS_S, position_valid);
     write_enable();
     cs_low();
-    uint8_t hdr2[3] = {0x02, static_cast<uint8_t>(valid_addr >> 8), static_cast<uint8_t>(valid_addr & 0xFF)};
+    uint8_t hdr2[3] = {hw::FRAM_CMD_WRITE, static_cast<uint8_t>(valid_addr >> 8), static_cast<uint8_t>(valid_addr & 0xFF)};
     HAL_SPI_Transmit(m_pHspi, hdr2, 3, 100);
     uint8_t valid_data[1] = {0xFF};
     HAL_SPI_Transmit(m_pHspi, valid_data, 1, 100);
