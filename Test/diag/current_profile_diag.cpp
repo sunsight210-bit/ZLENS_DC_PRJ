@@ -77,11 +77,6 @@ struct ADC_STATS_S {
     uint16_t avg() const { return iCount ? iSum / iCount : 0; }
 };
 
-// Convert ADC to mA (R_sense=0.2Ω)
-uint32_t adc_to_ma(uint16_t adc) {
-    return static_cast<uint32_t>(adc) * 16500 / 4095;
-}
-
 // Wait for motor IDLE with safety
 bool safe_wait(zlens::MotorCtrl& motor, zlens::Encoder& encoder, uint32_t iTimeoutMs) {
     int32_t iLastPos = encoder.get_position();
@@ -132,9 +127,9 @@ static void diag_task_entry(void* params) {
         stBaseline.add(*pAdcCur);
         stBaselineVol.add(*pAdcVol);
     }
-    swo_printf("  CUR: avg=%u min=%u max=%u  (%lumA)\n",
+    swo_printf("  CUR: avg=%u min=%u max=%u  (%luADC)\n",
                stBaseline.avg(), stBaseline.iMin, stBaseline.iMax,
-               adc_to_ma(stBaseline.avg()));
+               stBaseline.avg());
     swo_printf("  VOL: avg=%u  (%lumV)\n",
                stBaselineVol.avg(),
                PowerMonitor::adc_to_voltage_mv(stBaselineVol.avg()));
@@ -260,9 +255,9 @@ static void diag_task_entry(void* params) {
             }
         }
 
-        swo_printf("const: avg=%u min=%u max=%u (%lu samples, %lumA avg)\n",
+        swo_printf("const: avg=%u min=%u max=%u (%lu samples, %luADC avg)\n",
                    aConstFwd[s].avg(), aConstFwd[s].iMin, aConstFwd[s].iMax,
-                   aConstFwd[s].iCount, adc_to_ma(aConstFwd[s].avg()));
+                   aConstFwd[s].iCount, aConstFwd[s].avg());
 
         vTaskDelay(pdMS_TO_TICKS(500));
         HAL_IWDG_Refresh(&hiwdg);
@@ -284,9 +279,9 @@ static void diag_task_entry(void* params) {
             if (motor.get_state() == MOTOR_STATE_E::IDLE) break;
         }
 
-        swo_printf("const: avg=%u min=%u max=%u (%lu samples, %lumA avg)\n",
+        swo_printf("const: avg=%u min=%u max=%u (%lu samples, %luADC avg)\n",
                    aConstRev[s].avg(), aConstRev[s].iMin, aConstRev[s].iMax,
-                   aConstRev[s].iCount, adc_to_ma(aConstRev[s].avg()));
+                   aConstRev[s].iCount, aConstRev[s].avg());
 
         vTaskDelay(pdMS_TO_TICKS(500));
         HAL_IWDG_Refresh(&hiwdg);
@@ -338,9 +333,9 @@ static void diag_task_entry(void* params) {
     if (!bStallDetected) motor.emergency_stop();
     stall.reset();
 
-    swo_printf("  REV stall: avg=%u min=%u max=%u (%lu samples, %lumA avg)\n",
+    swo_printf("  REV stall: avg=%u min=%u max=%u (%lu samples, %luADC avg)\n",
                stStallRev.avg(), stStallRev.iMin, stStallRev.iMax,
-               stStallRev.iCount, adc_to_ma(stStallRev.avg()));
+               stStallRev.iCount, stStallRev.avg());
 
     vTaskDelay(pdMS_TO_TICKS(500));
     HAL_IWDG_Refresh(&hiwdg);
@@ -383,35 +378,35 @@ static void diag_task_entry(void* params) {
     if (!bStallDetected) motor.emergency_stop();
     stall.reset();
 
-    swo_printf("  FWD stall: avg=%u min=%u max=%u (%lu samples, %lumA avg)\n",
+    swo_printf("  FWD stall: avg=%u min=%u max=%u (%lu samples, %luADC avg)\n",
                stStallFwd.avg(), stStallFwd.iMin, stStallFwd.iMax,
-               stStallFwd.iCount, adc_to_ma(stStallFwd.avg()));
+               stStallFwd.iCount, stStallFwd.avg());
 
     // ===================== Summary Table =====================
     swo_printf("\n============ SUMMARY ============\n");
-    swo_printf("Condition        ADC avg  ADC min  ADC max  mA avg\n");
+    swo_printf("Condition        ADC avg  ADC min  ADC max  ADC avg\n");
     swo_printf("-----------------------------------------------\n");
     swo_printf("Stopped          %-7u  %-7u  %-7u  %lu\n",
                stBaseline.avg(), stBaseline.iMin, stBaseline.iMax,
-               adc_to_ma(stBaseline.avg()));
+               stBaseline.avg());
 
     for (uint32_t s = 0; s < SPEED_COUNT; s++) {
         swo_printf("FWD @%-4u const  %-7u  %-7u  %-7u  %lu\n",
                    SPEEDS[s],
                    aConstFwd[s].avg(), aConstFwd[s].iMin, aConstFwd[s].iMax,
-                   adc_to_ma(aConstFwd[s].avg()));
+                   aConstFwd[s].avg());
         swo_printf("REV @%-4u const  %-7u  %-7u  %-7u  %lu\n",
                    SPEEDS[s],
                    aConstRev[s].avg(), aConstRev[s].iMin, aConstRev[s].iMax,
-                   adc_to_ma(aConstRev[s].avg()));
+                   aConstRev[s].avg());
     }
 
     swo_printf("Stall REV        %-7u  %-7u  %-7u  %lu\n",
                stStallRev.avg(), stStallRev.iMin, stStallRev.iMax,
-               adc_to_ma(stStallRev.avg()));
+               stStallRev.avg());
     swo_printf("Stall FWD        %-7u  %-7u  %-7u  %lu\n",
                stStallFwd.avg(), stStallFwd.iMin, stStallFwd.iMax,
-               adc_to_ma(stStallFwd.avg()));
+               stStallFwd.avg());
     swo_printf("=================================\n");
 
     swo_printf("\nVoltage: %lumV (ADC=%u)\n",
