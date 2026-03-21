@@ -1,5 +1,6 @@
 // App/Src/zoom_table.cpp
 #include "zoom_table.hpp"
+#include "hw_constants.hpp"
 #include "crc16.hpp"
 #include <algorithm>
 #include <cstring>
@@ -17,10 +18,10 @@ static constexpr uint32_t FLASH_ZOOM_ADDR = 0x0803F800;
 
 // Default 14-entry table (angle x100 values)
 static const ZOOM_ENTRY_S kDefaultTable[] = {
-    { 6,     0}, { 8,  1800}, {10,  3600}, {12,  6000},
-    {15,  9000}, {18, 12000}, {20, 15000}, {25, 18000},
-    {30, 21000}, {35, 24000}, {40, 27000}, {50, 30000},
-    {60, 33000}, {70, 34700}
+    { 6,     0}, {10,  7200}, {15, 11450}, {20, 14800},
+    {25, 18150}, {30, 21100}, {35, 23550}, {40, 25750},
+    {45, 27700}, {50, 29450}, {55, 31150}, {60, 32500},
+    {65, 33800}, {70, 34700}
 };
 
 void ZoomTable::init() {
@@ -34,8 +35,8 @@ void ZoomTable::load_defaults() {
 }
 
 int ZoomTable::angle_to_position(uint16_t angle_x100) const {
-    return static_cast<int>(
-        static_cast<int64_t>(angle_x100) * TOTAL_RANGE / 36000
+    return HOME_OFFSET + static_cast<int>(
+        static_cast<int64_t>(angle_x100) * TOTAL_RANGE / FULL_ROTATION_X100
     );
 }
 
@@ -125,12 +126,12 @@ bool ZoomTable::save_to_flash() {
     // Write: [count(1B padding to 2B)] + [entries as half-words] + [CRC16]
     HAL_FLASH_Program(0, FLASH_ZOOM_ADDR, m_iCount);
 
-    uint32_t addr = FLASH_ZOOM_ADDR + 2;
+    uint32_t addr = FLASH_ZOOM_ADDR + hw::FLASH_HALFWORD_SIZE;
     for (uint8_t i = 0; i < m_iCount; ++i) {
         HAL_FLASH_Program(0, addr, m_aEntries[i].zoom_x10);
-        addr += 2;
+        addr += hw::FLASH_HALFWORD_SIZE;
         HAL_FLASH_Program(0, addr, m_aEntries[i].angle_x100);
-        addr += 2;
+        addr += hw::FLASH_HALFWORD_SIZE;
     }
 
     // CRC over count + entries
@@ -152,12 +153,12 @@ bool ZoomTable::load_from_flash() {
     m_iCount = log.flash_memory[0];
     if (m_iCount > MAX_ENTRIES) { m_iCount = 0; return false; }
 
-    uint32_t offset = 2;
+    uint32_t offset = hw::FLASH_HALFWORD_SIZE;
     for (uint8_t i = 0; i < m_iCount; ++i) {
         m_aEntries[i].zoom_x10 = log.flash_memory[offset] | (log.flash_memory[offset+1] << 8);
-        offset += 2;
+        offset += hw::FLASH_HALFWORD_SIZE;
         m_aEntries[i].angle_x100 = log.flash_memory[offset] | (log.flash_memory[offset+1] << 8);
-        offset += 2;
+        offset += hw::FLASH_HALFWORD_SIZE;
     }
     return true;
 #else
@@ -166,12 +167,12 @@ bool ZoomTable::load_from_flash() {
     m_iCount = flash_ptr[0];
     if (m_iCount > MAX_ENTRIES) { m_iCount = 0; return false; }
 
-    uint32_t offset = 2;
+    uint32_t offset = hw::FLASH_HALFWORD_SIZE;
     for (uint8_t i = 0; i < m_iCount; ++i) {
         m_aEntries[i].zoom_x10 = flash_ptr[offset] | (flash_ptr[offset+1] << 8);
-        offset += 2;
+        offset += hw::FLASH_HALFWORD_SIZE;
         m_aEntries[i].angle_x100 = flash_ptr[offset] | (flash_ptr[offset+1] << 8);
-        offset += 2;
+        offset += hw::FLASH_HALFWORD_SIZE;
     }
     return true;
 #endif

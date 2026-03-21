@@ -12,7 +12,10 @@ struct ZOOM_ENTRY_S {
 class ZoomTable {
 public:
     static constexpr uint8_t MAX_ENTRIES = 32;
-    static constexpr int32_t TOTAL_RANGE = 214648;
+    static constexpr int32_t EXTERNAL_GEAR_RATIO = 4;
+    static constexpr int32_t TOTAL_RANGE = 858592;   // 214648 × 4, 大齿轮满圈
+    static constexpr int32_t HOME_OFFSET = 2048;      // 归零后逻辑原点偏移
+    static constexpr int32_t FULL_ROTATION_X100 = 36000; // 360° × 100
 
     void init();
     void load_defaults();
