@@ -61,6 +61,9 @@ public:
     static constexpr uint16_t STALL_TEST_DWELL_MS = 4000;
     static constexpr uint8_t  STALL_TEST_NUM_SPEEDS = 3;
     static constexpr uint16_t STALL_TEST_SPEEDS[3] = {1280, 2133, 3413};  // 30%, 50%, 80% of PWM_ARR
+    static constexpr uint16_t STALL_TEST_ZOOM_X10  = 20;    // 2.0x 测试位置
+    static constexpr uint16_t STALL_PRINT_INTERVAL = 500;   // ADC 打印间隔 (ms)
+    static constexpr uint16_t HEARTBEAT_INTERVAL   = 5000;  // 心跳间隔 (ms)
 
 private:
     MotorCtrl* m_pMotor = nullptr;

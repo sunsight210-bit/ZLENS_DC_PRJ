@@ -7,6 +7,8 @@
 
 namespace zlens {
 
+constexpr uint16_t MotorTask::STALL_TEST_SPEEDS[3];
+
 void MotorTask::init(MotorCtrl* pMotor, Encoder* pEncoder, StallDetect* pStall,
                      ZoomTable* pZoom, FramStorage* pFram, SystemManager* pSm,
                      QueueHandle_t cmdQ, QueueHandle_t rspQ, QueueHandle_t saveQ,
@@ -44,14 +46,15 @@ void MotorTask::run_once() {
     m_pStall->update(iAdcFiltered, iPos, HAL_GetTick());
     m_pMotor->update();
 
-    // Overcurrent: highest priority (any state except IDLE)
-    if (m_pStall->is_overcurrent() && m_eTaskState != TASK_STATE_E::IDLE) {
+    // Overcurrent: highest priority (any state except IDLE and STALL_CURRENT_TEST)
+    if (m_pStall->is_overcurrent() && m_eTaskState != TASK_STATE_E::IDLE
+        && m_eTaskState != TASK_STATE_E::STALL_CURRENT_TEST) {
         handle_overcurrent();
         return;
     }
 
-    // Stall detection
-    if (m_pStall->is_stalled()) {
+    // Stall detection (skip during stall current test — we want to stay stalled)
+    if (m_pStall->is_stalled() && m_eTaskState != TASK_STATE_E::STALL_CURRENT_TEST) {
         handle_stall();
         return;
     }
@@ -82,6 +85,9 @@ void MotorTask::run_once() {
     case TASK_STATE_E::ACCURACY_TEST:
         process_accuracy_test();
         break;
+    case TASK_STATE_E::STALL_CURRENT_TEST:
+        process_stall_current_test();
+        break;
     default:
         break;
     }
@@ -106,8 +112,16 @@ void MotorTask::dispatch_command(const CMD_MESSAGE_S& stCmd) {
     }
     case cmd::HOMING:
         if (m_eTaskState != TASK_STATE_E::IDLE) break;
-        m_pSm->transition_to(SYSTEM_STATE_E::HOMING);
-        start_homing(stCmd.param == 1);
+        if (stCmd.param == 2) {
+            // Stall current test: home first, then test
+            m_pSm->transition_to(SYSTEM_STATE_E::HOMING);
+            m_bFullDiagnostics = false;
+            m_bStallTestPending = true;
+            start_homing(false);
+        } else {
+            m_pSm->transition_to(SYSTEM_STATE_E::HOMING);
+            start_homing(stCmd.param == 1);
+        }
         break;
     case cmd::FORCE_STOP:
         m_pMotor->emergency_stop();
@@ -223,6 +237,9 @@ void MotorTask::process_homing() {
             if (m_bFullDiagnostics) {
                 // Chain: homing → backlash measurement
                 start_backlash_measure();
+            } else if (m_bStallTestPending) {
+                m_bStallTestPending = false;
+                start_stall_current_test();
             } else {
                 m_eTaskState = TASK_STATE_E::IDLE;
                 m_pSm->transition_to(SYSTEM_STATE_E::READY);
@@ -264,6 +281,7 @@ void MotorTask::handle_stall() {
         m_eTaskState = TASK_STATE_E::HOMING_SETTLE;
         m_pStall->set_direction(StallDetect::Direction::FORWARD);
         m_pStall->start_motor();
+        m_pMotor->set_speed_limit(MotorCtrl::MIN_SPEED);  // 最低速匀速走，避免抖动
         m_pMotor->move_to(HOMING_SETTLE_DISTANCE);
 #ifndef BUILD_TESTING
         swo_printf("[INFO] Homing: precise limit found, settling %ld counts\n",
@@ -404,6 +422,31 @@ void MotorTask::process_cycling() {
     }
 }
 
+// --- Settle detection helpers ---
+
+void MotorTask::reset_settle() {
+    m_iSettleCount = 0;
+    m_iSettleLastPos = m_pEncoder->get_position();
+    m_bSettling = true;
+}
+
+bool MotorTask::is_settled() {
+    if (!m_bSettling) return true;
+    int32_t iPos = m_pEncoder->get_position();
+    if (iPos != m_iSettleLastPos) {
+        m_iSettleLastPos = iPos;
+        m_iSettleCount = 0;
+        return false;
+    }
+    if (++m_iSettleCount >= SETTLE_STABLE_COUNT) {
+        m_bSettling = false;
+        return true;
+    }
+    return false;
+}
+
+// --- Backlash measurement ---
+
 void MotorTask::start_backlash_measure() {
     m_pMotor->set_backlash_enabled(false);
     m_pMotor->set_speed_limit(HOMING_SLOW_SPEED);
@@ -416,12 +459,16 @@ void MotorTask::start_backlash_measure() {
 }
 
 void MotorTask::process_backlash_measure() {
-    if (m_pMotor->get_state() != MOTOR_STATE_E::IDLE) return;
-
     switch (m_eBLPhase) {
     case BL_MEASURE_PHASE_E::MOVE_TO_MID:
-        // Arrived at middle, record reference position
-        m_iBLRefPos = m_pEncoder->get_position();
+        if (m_pMotor->get_state() != MOTOR_STATE_E::IDLE) return;
+        reset_settle();
+        m_eBLPhase = BL_MEASURE_PHASE_E::SETTLE_MID;
+        break;
+
+    case BL_MEASURE_PHASE_E::SETTLE_MID:
+        if (!is_settled()) return;
+        m_iBLRefPos = get_settled_position();
         m_eBLPhase = BL_MEASURE_PHASE_E::REVERSE;
         m_pStall->set_direction(StallDetect::Direction::REVERSE);
         m_pStall->start_motor();
@@ -429,37 +476,47 @@ void MotorTask::process_backlash_measure() {
         break;
 
     case BL_MEASURE_PHASE_E::REVERSE:
-        // Reversed, now go forward back to reference
+        if (m_pMotor->get_state() != MOTOR_STATE_E::IDLE) return;
+        reset_settle();
+        m_eBLPhase = BL_MEASURE_PHASE_E::SETTLE_REV;
+        break;
+
+    case BL_MEASURE_PHASE_E::SETTLE_REV:
+        if (!is_settled()) return;
         m_eBLPhase = BL_MEASURE_PHASE_E::FORWARD;
         m_pStall->set_direction(StallDetect::Direction::FORWARD);
         m_pStall->start_motor();
         m_pMotor->move_to(m_iBLRefPos);
         break;
 
-    case BL_MEASURE_PHASE_E::FORWARD: {
-        // Arrived, measure error
-        int32_t iActual = m_pEncoder->get_position();
+    case BL_MEASURE_PHASE_E::FORWARD:
+        if (m_pMotor->get_state() != MOTOR_STATE_E::IDLE) return;
+        reset_settle();
+        m_eBLPhase = BL_MEASURE_PHASE_E::SETTLE_FWD;
+        break;
+
+    case BL_MEASURE_PHASE_E::SETTLE_FWD: {
+        if (!is_settled()) return;
+        int32_t iActual = get_settled_position();
         int32_t iError = iActual - m_iBLRefPos;
         if (iError < 0) iError = -iError;
         m_aBLSamples[m_iBLSampleIdx++] = iError;
 
-        if (m_iBLSampleIdx < 3) {
-            // Next cycle: reverse again
+        if (m_iBLSampleIdx < 8) {
             m_eBLPhase = BL_MEASURE_PHASE_E::REVERSE;
             m_pStall->set_direction(StallDetect::Direction::REVERSE);
             m_pStall->start_motor();
             m_pMotor->move_to(m_iBLRefPos - BL_REVERSE_DIST);
         } else {
-            // Calculate average backlash, subtract DEADZONE
-            int32_t iSum = m_aBLSamples[0] + m_aBLSamples[1] + m_aBLSamples[2];
-            int32_t iAvg = iSum / 3;
+            int32_t iSum = 0;
+            for (uint8_t k = 0; k < 8; k++) iSum += m_aBLSamples[k];
+            int32_t iAvg = iSum / 8;
             int16_t iBacklash = static_cast<int16_t>(
-                iAvg > MotorCtrl::DEADZONE ? iAvg - MotorCtrl::DEADZONE : 0);
+                iAvg > BL_DEADZONE ? iAvg - BL_DEADZONE : 0);
             m_pMotor->set_backlash(iBacklash);
 
-            // Save backlash to FRAM
             {
-                int32_t iPos = m_pEncoder->get_position();
+                int32_t iPos = get_settled_position();
                 uint16_t iZoom = m_pZoom->get_nearest_zoom(iPos);
                 SAVE_MESSAGE_S stSave = {iPos, iZoom, save_reason::ARRIVED,
                                           iBacklash, 0xFF};
@@ -470,7 +527,6 @@ void MotorTask::process_backlash_measure() {
             m_pStall->reset();
 
             if (m_bFullDiagnostics) {
-                // Chain: backlash measurement → accuracy test
                 start_accuracy_test();
             } else {
                 m_eTaskState = TASK_STATE_E::IDLE;
@@ -482,8 +538,10 @@ void MotorTask::process_backlash_measure() {
     }
 }
 
+// --- Accuracy test ---
+
 void MotorTask::start_accuracy_test() {
-    m_pMotor->set_backlash_enabled(true);  // test WITH compensation
+    m_pMotor->set_backlash_enabled(true);
     m_eAccPhase = ACC_TEST_PHASE_E::MOVE_TO_START;
     m_iAccTripCount = 0;
     m_iAccErrorIdx = 0;
@@ -494,20 +552,31 @@ void MotorTask::start_accuracy_test() {
 }
 
 void MotorTask::process_accuracy_test() {
-    // Wait for full completion (including APPROACHING phase 2)
-    if (m_pMotor->get_state() != MOTOR_STATE_E::IDLE) return;
-
     switch (m_eAccPhase) {
     case ACC_TEST_PHASE_E::MOVE_TO_START:
-        m_iAccRefPos = m_pEncoder->get_position();
+        if (m_pMotor->get_state() != MOTOR_STATE_E::IDLE) return;
+        reset_settle();
+        m_eAccPhase = ACC_TEST_PHASE_E::SETTLE_START;
+        break;
+
+    case ACC_TEST_PHASE_E::SETTLE_START:
+        if (!is_settled()) return;
+        m_iAccRefPos = get_settled_position();
         m_eAccPhase = ACC_TEST_PHASE_E::MOVE_TO_END;
         m_pStall->set_direction(StallDetect::Direction::FORWARD);
         m_pStall->start_motor();
         m_pMotor->move_to(ACC_END_POS);
         break;
 
-    case ACC_TEST_PHASE_E::MOVE_TO_END: {
-        int32_t iError = m_pEncoder->get_position() - ACC_END_POS;
+    case ACC_TEST_PHASE_E::MOVE_TO_END:
+        if (m_pMotor->get_state() != MOTOR_STATE_E::IDLE) return;
+        reset_settle();
+        m_eAccPhase = ACC_TEST_PHASE_E::SETTLE_END;
+        break;
+
+    case ACC_TEST_PHASE_E::SETTLE_END: {
+        if (!is_settled()) return;
+        int32_t iError = get_settled_position() - ACC_END_POS;
         m_aAccErrors[m_iAccErrorIdx++] = iError;
         m_eAccPhase = ACC_TEST_PHASE_E::MOVE_TO_START_RETURN;
         m_pStall->set_direction(StallDetect::Direction::REVERSE);
@@ -516,8 +585,15 @@ void MotorTask::process_accuracy_test() {
         break;
     }
 
-    case ACC_TEST_PHASE_E::MOVE_TO_START_RETURN: {
-        int32_t iError = m_pEncoder->get_position() - ACC_START_POS;
+    case ACC_TEST_PHASE_E::MOVE_TO_START_RETURN:
+        if (m_pMotor->get_state() != MOTOR_STATE_E::IDLE) return;
+        reset_settle();
+        m_eAccPhase = ACC_TEST_PHASE_E::SETTLE_RETURN;
+        break;
+
+    case ACC_TEST_PHASE_E::SETTLE_RETURN: {
+        if (!is_settled()) return;
+        int32_t iError = get_settled_position() - ACC_START_POS;
         m_aAccErrors[m_iAccErrorIdx++] = iError;
         m_iAccTripCount++;
         if (m_iAccTripCount < ACC_NUM_TRIPS) {
@@ -563,6 +639,163 @@ void MotorTask::print_accuracy_report() {
 #endif
 }
 
+// --- Stall current test ---
+
+void MotorTask::start_stall_current_test() {
+    m_iStallSpeedIdx = 0;
+    m_eStallTestPhase = STALL_TEST_PHASE_E::MOVE_TO_2X;
+    m_eTaskState = TASK_STATE_E::STALL_CURRENT_TEST;
+    m_pMotor->set_backlash_enabled(false);
+
+    // Move to 2.0x position
+    int32_t iTarget = m_pZoom->get_position(STALL_TEST_ZOOM_X10);  // 2.0x
+    m_pMotor->set_speed_limit(MotorCtrl::MAX_SPEED);
+    m_pStall->set_direction(StallDetect::Direction::FORWARD);
+    m_pStall->start_motor();
+    m_pMotor->move_to(iTarget);
+#ifndef BUILD_TESTING
+    swo_printf("\n============ STALL CURRENT TEST ============\n");
+    swo_printf(" Speeds: 30%% (%u), 50%% (%u), 80%% (%u)\n",
+               STALL_TEST_SPEEDS[0], STALL_TEST_SPEEDS[1], STALL_TEST_SPEEDS[2]);
+    swo_printf(" Dwell: %u ms per speed\n", STALL_TEST_DWELL_MS);
+    swo_printf(" Moving to 2.0x...\n");
+#endif
+}
+
+void MotorTask::process_stall_current_test() {
+    uint16_t iAdcRaw = m_pAdcCurrent ? *m_pAdcCurrent : 0;
+
+    switch (m_eStallTestPhase) {
+    case STALL_TEST_PHASE_E::MOVE_TO_2X:
+        if (m_pMotor->get_state() != MOTOR_STATE_E::IDLE) return;
+        reset_settle();
+        m_eStallTestPhase = STALL_TEST_PHASE_E::SETTLE_2X;
+        break;
+
+    case STALL_TEST_PHASE_E::SETTLE_2X:
+        if (!is_settled()) return;
+        m_eStallTestPhase = STALL_TEST_PHASE_E::START_STALL;
+        break;
+
+    case STALL_TEST_PHASE_E::START_STALL: {
+        // Set test speed and drive toward negative limit
+        uint16_t iSpeed = STALL_TEST_SPEEDS[m_iStallSpeedIdx];
+        m_pMotor->set_speed_limit(iSpeed);
+        m_pStall->set_direction(StallDetect::Direction::REVERSE);
+        m_pStall->start_motor();
+        m_pMotor->move_to(-HOMING_FAR_DISTANCE);
+
+        // Reset ADC sampling
+        m_iStallDwellCount = 0;
+        m_iStallAdcSum = 0;
+        m_iStallAdcMax = 0;
+        m_iStallAdcMin = 0xFFFF;
+        m_iStallAdcSamples = 0;
+
+        m_eStallTestPhase = STALL_TEST_PHASE_E::STALL_DWELL;
+#ifndef BUILD_TESTING
+        uint32_t iPct = static_cast<uint32_t>(iSpeed) * 100 / MotorCtrl::PWM_ARR;
+        swo_printf("\n--- Speed %u/%u: %u (%lu%%) ---\n",
+                   m_iStallSpeedIdx + 1, STALL_TEST_NUM_SPEEDS, iSpeed, iPct);
+        swo_printf(" Driving toward negative limit...\n");
+#endif
+        break;
+    }
+
+    case STALL_TEST_PHASE_E::STALL_DWELL:
+        // Sample ADC every tick
+        m_iStallAdcSum += iAdcRaw;
+        m_iStallAdcSamples++;
+        if (iAdcRaw > m_iStallAdcMax) m_iStallAdcMax = iAdcRaw;
+        if (iAdcRaw < m_iStallAdcMin) m_iStallAdcMin = iAdcRaw;
+
+        m_iStallDwellCount++;
+
+        // Reset stall detector to prevent it from accumulating
+        if (m_pStall->is_stalled()) {
+            m_pStall->reset();
+            m_pStall->set_direction(StallDetect::Direction::REVERSE);
+            m_pStall->start_motor();
+        }
+
+#ifndef BUILD_TESTING
+        // Print ADC every 500ms
+        if (m_iStallDwellCount % STALL_PRINT_INTERVAL == 0) {
+            uint16_t iAvgSoFar = static_cast<uint16_t>(m_iStallAdcSum / m_iStallAdcSamples);
+            swo_printf(" [%us] ADC raw=%u avg=%u min=%u max=%u\n",
+                       m_iStallDwellCount / 1000, iAdcRaw, iAvgSoFar,
+                       m_iStallAdcMin, m_iStallAdcMax);
+        }
+#endif
+
+        if (m_iStallDwellCount >= STALL_TEST_DWELL_MS) {
+            // Dwell complete — record results
+            uint16_t iAvg = static_cast<uint16_t>(m_iStallAdcSum / m_iStallAdcSamples);
+            m_aStallResults[m_iStallSpeedIdx][0] = iAvg;
+            m_aStallResults[m_iStallSpeedIdx][1] = m_iStallAdcMin;
+            m_aStallResults[m_iStallSpeedIdx][2] = m_iStallAdcMax;
+
+            // Stop motor, return to 2x
+            m_pMotor->emergency_stop();
+            m_pStall->reset();
+            m_eStallTestPhase = STALL_TEST_PHASE_E::STOP_AND_RETURN;
+
+#ifndef BUILD_TESTING
+            swo_printf(" DONE: avg=%u min=%u max=%u (samples=%u)\n",
+                       iAvg, m_iStallAdcMin, m_iStallAdcMax, m_iStallAdcSamples);
+#endif
+        }
+        break;
+
+    case STALL_TEST_PHASE_E::STOP_AND_RETURN: {
+        // Return to 2.0x
+        int32_t iTarget = m_pZoom->get_position(STALL_TEST_ZOOM_X10);
+        m_pMotor->set_speed_limit(MotorCtrl::MAX_SPEED);
+        m_pStall->set_direction(StallDetect::Direction::FORWARD);
+        m_pStall->start_motor();
+        m_pMotor->move_to(iTarget);
+        m_eStallTestPhase = STALL_TEST_PHASE_E::SETTLE_RETURN;
+        break;
+    }
+
+    case STALL_TEST_PHASE_E::SETTLE_RETURN:
+        if (m_pMotor->get_state() != MOTOR_STATE_E::IDLE) return;
+        reset_settle();
+
+        m_iStallSpeedIdx++;
+        if (m_iStallSpeedIdx < STALL_TEST_NUM_SPEEDS) {
+            // Next speed
+            m_eStallTestPhase = STALL_TEST_PHASE_E::START_STALL;
+        } else {
+            // All speeds done
+            if (!is_settled()) return;
+            print_stall_current_report();
+            m_pMotor->set_speed_limit(MotorCtrl::MAX_SPEED);
+            m_pStall->reset();
+            m_eTaskState = TASK_STATE_E::IDLE;
+            m_pSm->transition_to(SYSTEM_STATE_E::READY);
+        }
+        break;
+    }
+}
+
+void MotorTask::print_stall_current_report() {
+#ifndef BUILD_TESTING
+    swo_printf("\n============ STALL CURRENT RESULTS ============\n");
+    swo_printf(" %-8s  %-8s  %-8s  %-8s  %-8s\n",
+               "Speed", "Duty%", "ADC_avg", "ADC_min", "ADC_max");
+    for (uint8_t i = 0; i < STALL_TEST_NUM_SPEEDS; ++i) {
+        uint32_t iPct = static_cast<uint32_t>(STALL_TEST_SPEEDS[i]) * 100
+                        / MotorCtrl::PWM_ARR;
+        swo_printf(" %-8u  %-8lu  %-8u  %-8u  %-8u\n",
+                   STALL_TEST_SPEEDS[i], iPct,
+                   m_aStallResults[i][0], m_aStallResults[i][1],
+                   m_aStallResults[i][2]);
+    }
+    swo_printf("================================================\n");
+#endif
+}
+
 void MotorTask::send_response(uint8_t cmd, uint16_t param) {
     RSP_MESSAGE_S stRsp = {cmd, param};
     xQueueSend(m_rspQueue, &stRsp, 0);
@@ -595,7 +828,7 @@ extern "C" void motor_task_entry(void* params) {
         task.run_once();
 
         // Heartbeat every 5s
-        if (++iHeartbeat >= 5000) {
+        if (++iHeartbeat >= HEARTBEAT_INTERVAL) {
             iHeartbeat = 0;
             swo_printf("[MOTOR] HB state=%d motor=%d pos=%ld\n",
                        (int)task.get_state(),
