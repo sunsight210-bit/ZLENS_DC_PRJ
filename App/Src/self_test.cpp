@@ -1,6 +1,7 @@
 // App/Src/self_test.cpp
 #include "self_test.hpp"
 #include "swo_debug.hpp"
+#include "task_config.hpp"
 #include "zoom_table.hpp"
 #include <cstring>
 
@@ -156,26 +157,15 @@ void SelfTest::finalize() {
 }
 
 void SelfTest::print_report() {
-    // --- Helper lambdas for ADC conversions ---
-    // ADC->mA: R_sense=0.2 Ohm, Vref=3.3V, 12-bit ADC
-    // V_sense = ADC * 3300mV / 4095
-    // I = V_sense / R_sense = V_sense / 0.2 = V_sense * 5  (mV->mA when R in Ohm)
-    // I_mA = ADC * 3300 * 5 / 4095 = ADC * 16500 / 4095
-    auto adc_to_current_ma = [](uint16_t adc) -> uint32_t {
-        return static_cast<uint32_t>(adc) * 16500 / 4095;
-    };
-
     // Read live ADC values
     uint16_t iVRaw = m_pAdcVoltage ? *m_pAdcVoltage : 0;
     uint16_t iCRaw = m_pAdcCurrent ? *m_pAdcCurrent : 0;
     uint32_t iVmv = PowerMonitor::adc_to_voltage_mv(iVRaw);
-    uint32_t iCma = adc_to_current_ma(iCRaw);
     uint32_t iThreshVmv = PowerMonitor::adc_to_voltage_mv(
         PowerMonitor::POWER_DOWN_THRESHOLD);
 
-    // Constants from task_config.hpp rsp:: namespace (avoid include due to FreeRTOS deps)
-    constexpr uint16_t FW_VERSION = 0x1000;  // rsp::FW_VERSION
-    constexpr uint16_t LENS_TYPE  = 0x0004;  // rsp::LENS_TYPE
+    constexpr uint16_t FW_VERSION = rsp::FW_VERSION;
+    constexpr uint16_t LENS_TYPE  = rsp::LENS_TYPE;
 
     swo_printf("\n============ ZLENS_DC SELF-TEST REPORT ============\n");
     swo_printf("RESULT: %s         FW: v%u.%u.%u  Lens: 0x%02X\n",
@@ -197,14 +187,9 @@ void SelfTest::print_report() {
                    PowerMonitor::POWER_DOWN_THRESHOLD);
     }
     // BASELINE
-    {
-        uint32_t iBaseMa = adc_to_current_ma(m_stResult.iMeasuredBaseline);
-        uint32_t iMaxMa = adc_to_current_ma(BASELINE_MAX);
-        swo_printf(" BASELINE ..... %s  %lumA / ADC=%u (max %lumA/%u)\n",
-                   m_stResult.aPass[1] ? "PASS" : "FAIL",
-                   iBaseMa, m_stResult.iMeasuredBaseline,
-                   iMaxMa, BASELINE_MAX);
-    }
+    swo_printf(" BASELINE ..... %s  ADC=%u (max %u)\n",
+               m_stResult.aPass[1] ? "PASS" : "FAIL",
+               m_stResult.iMeasuredBaseline, BASELINE_MAX);
     // FRAM_RW
     swo_printf(" FRAM_RW ...... %s  addr=0x%04X pattern=0x%02X\n",
                m_stResult.aPass[2] ? "PASS" : "FAIL",
@@ -216,8 +201,8 @@ void SelfTest::print_report() {
 
     // --- Mechanical ---
     {
-        constexpr int32_t SOFT_LIMIT_OFFSET = 800;  // from MotorTask
-        constexpr int32_t HOMING_RETRACT = 8000;     // from MotorTask
+        constexpr int32_t SOFT_LIMIT_OFFSET = ZoomTable::HOME_OFFSET;
+        constexpr int32_t HOMING_RETRACT = homing::RETRACT_DISTANCE;
         int32_t iRange = ZoomTable::TOTAL_RANGE;
         swo_printf("\n[Mechanical]\n");
         swo_printf(" Total range     %ld counts\n", static_cast<long>(iRange));
@@ -227,7 +212,7 @@ void SelfTest::print_report() {
                    static_cast<long>(iRange - SOFT_LIMIT_OFFSET),
                    static_cast<long>(SOFT_LIMIT_OFFSET));
         swo_printf(" Homing retract  %ld counts\n", static_cast<long>(HOMING_RETRACT));
-        swo_printf(" Encoder         512PPR x4 = 2048/rev  ratio=104.77:1\n");
+        swo_printf(" Encoder         512PPR x4 = 2048/rev  ratio=104.77:1 x gear 4:1 = 419.08:1\n");
     }
 
     // --- Motor ---
@@ -249,14 +234,12 @@ void SelfTest::print_report() {
 
     // --- Protection Thresholds ---
     {
-        uint32_t iStallMa = adc_to_current_ma(StallDetect::STALL_THRESHOLD);
-        uint32_t iOcMa = adc_to_current_ma(StallDetect::OVERCURRENT_THRESHOLD);
         swo_printf("\n[Protection Thresholds]\n");
-        swo_printf(" Stall           ADC>=%u (~%lumA)  confirm=%u ticks\n",
-                   StallDetect::STALL_THRESHOLD, iStallMa,
+        swo_printf(" Stall           ADC>=%u  confirm=%u ticks\n",
+                   StallDetect::STALL_THRESHOLD,
                    StallDetect::STALL_CONFIRM_COUNT);
-        swo_printf(" Overcurrent     ADC>=%u (~%lumA) confirm=%u ticks\n",
-                   StallDetect::OVERCURRENT_THRESHOLD, iOcMa,
+        swo_printf(" Overcurrent     ADC>=%u  confirm=%u ticks\n",
+                   StallDetect::OVERCURRENT_THRESHOLD,
                    StallDetect::OVERCURRENT_CONFIRM);
         swo_printf(" Blanking        %u ticks\n", StallDetect::BLANKING_TICKS);
         swo_printf(" Encoder stall   %u ticks no movement\n",
@@ -272,12 +255,12 @@ void SelfTest::print_report() {
             "IDLE", "ACCEL", "CONST", "DECEL", "BRAKE", "STALL"
         };
         uint8_t iStateIdx = static_cast<uint8_t>(m_pMotor->get_state());
-        const char* pState = (iStateIdx < 6) ? STATE_NAMES[iStateIdx] : "?";
+        const char* pState = (iStateIdx < sizeof(STATE_NAMES) / sizeof(STATE_NAMES[0]))
+                             ? STATE_NAMES[iStateIdx] : "?";
         swo_printf("\n[Live Readings]\n");
         swo_printf(" Voltage         %lu.%luV / ADC=%u\n",
                    iVmv / 1000, (iVmv % 1000) / 100, iVRaw);
-        swo_printf(" Current         %lumA / ADC=%u\n",
-                   iCma, iCRaw);
+        swo_printf(" Current ADC     %u\n", iCRaw);
         swo_printf(" Encoder pos     %ld\n",
                    static_cast<long>(m_pEncoder->get_position()));
         swo_printf(" Motor state     %s\n", pState);
