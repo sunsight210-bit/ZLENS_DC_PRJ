@@ -81,4 +81,8 @@ extern IWDG_TypeDef mock_IWDG_instance;
 #define GPIOA (&mock_GPIOA_instance)
 #define ADC1  (&mock_ADC1_instance)
 #define DAC1  (&mock_DAC_instance)
+
+#define DAC_CHANNEL_1       0x00000000U
+#define DAC_CHANNEL_2       0x00000010U
+#define DAC_ALIGN_12B_R     0x00000000U
 #define IWDG  (&mock_IWDG_instance)

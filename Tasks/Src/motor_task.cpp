@@ -55,6 +55,22 @@ void MotorTask::run_once() {
 
     // Stall detection (skip during stall current test — we want to stay stalled)
     if (m_pStall->is_stalled() && m_eTaskState != TASK_STATE_E::STALL_CURRENT_TEST) {
+#ifndef BUILD_TESTING
+        swo_printf("[STALL] current stall state=%d pos=%ld adc=%u\n",
+                   (int)m_eTaskState, static_cast<long>(iPos), iAdcFiltered);
+#endif
+        handle_stall();
+        return;
+    }
+
+    // Encoder stall detection (homing only — mechanical limit stops encoder)
+    if (m_pStall->encoder_stalled() &&
+        (m_eTaskState == TASK_STATE_E::HOMING_FAST ||
+         m_eTaskState == TASK_STATE_E::HOMING_SLOW)) {
+#ifndef BUILD_TESTING
+        swo_printf("[STALL] encoder stall state=%d pos=%ld adc=%u\n",
+                   (int)m_eTaskState, static_cast<long>(iPos), iAdcFiltered);
+#endif
         handle_stall();
         return;
     }
@@ -101,6 +117,10 @@ void MotorTask::dispatch_command(const CMD_MESSAGE_S& stCmd) {
     switch (stCmd.cmd) {
     case cmd::SET_ZOOM: {
         if (m_eTaskState != TASK_STATE_E::IDLE) break;
+        if (!m_pZoom->is_valid_zoom(stCmd.param)) {
+            send_response(rsp_cmd::ERR_PARAM, stCmd.param);
+            break;
+        }
         m_pSm->transition_to(SYSTEM_STATE_E::BUSY);
         int32_t iTarget = m_pZoom->get_position(stCmd.param);
         m_pStall->set_direction(iTarget > m_pEncoder->get_position()
@@ -135,12 +155,14 @@ void MotorTask::dispatch_command(const CMD_MESSAGE_S& stCmd) {
         break;
     case cmd::ZOOM_INC: {
         if (m_eTaskState != TASK_STATE_E::IDLE) break;
-        m_pSm->transition_to(SYSTEM_STATE_E::BUSY);
         int32_t iPos = m_pEncoder->get_position();
         uint16_t iCurZoom = m_pZoom->get_nearest_zoom(iPos);
-        uint16_t iNewZoom = iCurZoom + stCmd.param;
-        uint16_t iMaxZoom = m_pZoom->get_max_zoom();
-        if (iNewZoom > iMaxZoom) iNewZoom = iMaxZoom;
+        uint16_t iNewZoom = m_pZoom->get_next_zoom(iCurZoom, static_cast<int8_t>(stCmd.param));
+        if (iNewZoom == iCurZoom) {
+            send_response(rsp_cmd::ERR_PARAM, stCmd.param);
+            break;
+        }
+        m_pSm->transition_to(SYSTEM_STATE_E::BUSY);
         int32_t iTarget = m_pZoom->get_position(iNewZoom);
         m_pStall->set_direction(iTarget > iPos
             ? StallDetect::Direction::FORWARD : StallDetect::Direction::REVERSE);
@@ -151,12 +173,14 @@ void MotorTask::dispatch_command(const CMD_MESSAGE_S& stCmd) {
     }
     case cmd::ZOOM_DEC: {
         if (m_eTaskState != TASK_STATE_E::IDLE) break;
-        m_pSm->transition_to(SYSTEM_STATE_E::BUSY);
         int32_t iPos = m_pEncoder->get_position();
         uint16_t iCurZoom = m_pZoom->get_nearest_zoom(iPos);
-        uint16_t iMinZoom = m_pZoom->get_min_zoom();
-        uint16_t iNewZoom = (stCmd.param >= iCurZoom) ? iMinZoom
-                            : (iCurZoom - stCmd.param < iMinZoom ? iMinZoom : iCurZoom - stCmd.param);
+        uint16_t iNewZoom = m_pZoom->get_next_zoom(iCurZoom, -static_cast<int8_t>(stCmd.param));
+        if (iNewZoom == iCurZoom) {
+            send_response(rsp_cmd::ERR_PARAM, stCmd.param);
+            break;
+        }
+        m_pSm->transition_to(SYSTEM_STATE_E::BUSY);
         int32_t iTarget = m_pZoom->get_position(iNewZoom);
         m_pStall->set_direction(iTarget > iPos
             ? StallDetect::Direction::FORWARD : StallDetect::Direction::REVERSE);
@@ -189,7 +213,9 @@ void MotorTask::start_homing(bool bFullDiag) {
     m_pStall->start_motor();
     m_pMotor->move_to(-HOMING_FAR_DISTANCE);
 #ifndef BUILD_TESTING
-    swo_printf("[INFO] Homing started: fast reverse to min limit\n");
+    swo_printf("[INFO] Homing started: fast reverse, pos=%ld motor=%d\n",
+               static_cast<long>(m_pEncoder->get_position()),
+               (int)m_pMotor->get_state());
 #endif
 }
 
@@ -198,6 +224,12 @@ void MotorTask::process_moving() {
         int32_t iPos = m_pEncoder->get_position();
         uint16_t iZoom = m_pZoom->get_nearest_zoom(iPos);
         m_pStall->reset();
+#ifndef BUILD_TESTING
+        swo_printf("[MOVE] pos=%ld target=%ld err=%ld\n",
+                   static_cast<long>(iPos),
+                   static_cast<long>(m_pMotor->get_final_target()),
+                   static_cast<long>(iPos - m_pMotor->get_final_target()));
+#endif
         send_response(rsp_cmd::ZOOM, iZoom);
         send_response(rsp_cmd::ARRIVED, rsp::ARRIVED_PARAM);
         send_save(save_reason::ARRIVED);
@@ -217,13 +249,15 @@ void MotorTask::process_homing() {
             m_pStall->start_motor();
             m_pMotor->move_to(-HOMING_FAR_DISTANCE);
 #ifndef BUILD_TESTING
-            swo_printf("[INFO] Homing: retract done, starting slow reverse\n");
+            swo_printf("[INFO] Homing: retract done pos=%ld, starting slow reverse\n",
+                       static_cast<long>(m_pEncoder->get_position()));
 #endif
         }
         break;
     case TASK_STATE_E::HOMING_SETTLE:
         if (m_pMotor->get_state() == MOTOR_STATE_E::IDLE) {
             // Settle done → homing complete
+            m_pMotor->set_min_speed(MotorCtrl::MIN_SPEED);
             m_pMotor->set_speed_limit(MotorCtrl::MAX_SPEED);
             m_pMotor->set_backlash_enabled(true);
             m_bHomingDone = true;
@@ -263,7 +297,8 @@ void MotorTask::handle_stall() {
         m_pMotor->emergency_stop();
         m_pEncoder->set_position(0);
         m_pStall->reset();
-        m_pMotor->set_speed_limit(HOMING_SLOW_SPEED);
+        m_pMotor->set_min_speed(HOMING_SETTLE_SPEED);
+        m_pMotor->set_speed_limit(HOMING_SETTLE_SPEED);
         m_eTaskState = TASK_STATE_E::HOMING_RETRACT;
         m_pStall->set_direction(StallDetect::Direction::FORWARD);
         m_pStall->start_motor();
@@ -281,7 +316,8 @@ void MotorTask::handle_stall() {
         m_eTaskState = TASK_STATE_E::HOMING_SETTLE;
         m_pStall->set_direction(StallDetect::Direction::FORWARD);
         m_pStall->start_motor();
-        m_pMotor->set_speed_limit(MotorCtrl::MIN_SPEED);  // 最低速匀速走，避免抖动
+        m_pMotor->set_min_speed(HOMING_SETTLE_SPEED);
+        m_pMotor->set_speed_limit(HOMING_SETTLE_SPEED);
         m_pMotor->move_to(HOMING_SETTLE_DISTANCE);
 #ifndef BUILD_TESTING
         swo_printf("[INFO] Homing: precise limit found, settling %ld counts\n",

@@ -25,7 +25,7 @@ TEST_F(StallDetectTest, BelowThreshold_NoStall) {
 
 TEST_F(StallDetectTest, BlankingWindow_IgnoresHighCurrent) {
     sd.start_motor();
-    for (int i = 0; i < 200; ++i) sd.update(300, 0, i * 100);
+    for (int i = 0; i < 200; ++i) sd.update(800, 0, i * 100);
     EXPECT_FALSE(sd.is_stalled());
 }
 
@@ -34,7 +34,7 @@ TEST_F(StallDetectTest, StallDetected_After1000Consecutive) {
     for (int i = 0; i < 200; ++i) sd.update(50, 0, i * 100);
     int32_t last_enc = 0;
     for (int i = 0; i < 1000; ++i) {
-        sd.update(250, last_enc, (200 + i) * 100);
+        sd.update(800, last_enc, (200 + i) * 100);
     }
     EXPECT_TRUE(sd.is_stalled());
 }
@@ -42,23 +42,23 @@ TEST_F(StallDetectTest, StallDetected_After1000Consecutive) {
 TEST_F(StallDetectTest, StallResets_OnLowCurrent) {
     sd.start_motor();
     for (int i = 0; i < 200; ++i) sd.update(50, 0, i * 100);
-    for (int i = 0; i < 500; ++i) sd.update(250, 0, (200 + i) * 100);
+    for (int i = 0; i < 500; ++i) sd.update(800, 0, (200 + i) * 100);
     sd.update(50, 0, 700 * 100);
-    for (int i = 0; i < 500; ++i) sd.update(250, 0, (701 + i) * 100);
+    for (int i = 0; i < 500; ++i) sd.update(800, 0, (701 + i) * 100);
     EXPECT_FALSE(sd.is_stalled());
 }
 
 TEST_F(StallDetectTest, Overcurrent_FastResponse) {
     sd.start_motor();
     for (int i = 0; i < 200; ++i) sd.update(50, 0, i * 100);
-    for (int i = 0; i < 100; ++i) sd.update(1300, 0, (200 + i) * 100);
+    for (int i = 0; i < 100; ++i) sd.update(3500, 0, (200 + i) * 100);
     EXPECT_TRUE(sd.is_overcurrent());
 }
 
 TEST_F(StallDetectTest, EncoderStall_NoMovement500ms) {
     sd.start_motor();
     for (int i = 0; i < 200; ++i) sd.update(50, 0, i * 100);
-    for (int i = 0; i < 500; ++i) sd.update(250, 0, (200 + i) * 100);
+    for (int i = 0; i < 500; ++i) sd.update(800, 0, (200 + i) * 100);
     EXPECT_TRUE(sd.encoder_stalled());
 }
 
@@ -72,7 +72,7 @@ TEST_F(StallDetectTest, DirectionDetection) {
 TEST_F(StallDetectTest, Reset_ClearsState) {
     sd.start_motor();
     for (int i = 0; i < 200; ++i) sd.update(50, 0, i * 100);
-    for (int i = 0; i < 1000; ++i) sd.update(250, 0, (200 + i) * 100);
+    for (int i = 0; i < 1000; ++i) sd.update(800, 0, (200 + i) * 100);
     EXPECT_TRUE(sd.is_stalled());
     sd.reset();
     EXPECT_FALSE(sd.is_stalled());

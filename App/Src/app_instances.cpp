@@ -25,7 +25,6 @@ QueueHandle_t g_cmdQueue = nullptr;
 QueueHandle_t g_rspQueue = nullptr;
 QueueHandle_t g_saveQueue = nullptr;
 volatile bool g_bSpiEmergency = false;
-volatile bool g_bUartSelfTestReq = false;
 
 // Global App module instances
 MotorCtrl g_Motor;
@@ -52,6 +51,7 @@ extern "C" void app_init(void) {
 
     // Init App modules
     g_Motor.init(&htim3, &hdac, &g_Encoder);
+    g_Motor.set_soft_limit_min(ZoomTable::HOME_OFFSET);  // don't overshoot below soft limit
     HAL_DAC_Start(&hdac, DAC_CHANNEL_2);   // enable DAC CH2 output
     g_Motor.set_vref_mv(2000);  // A4950 VREF=2.0V
     g_Encoder.init();

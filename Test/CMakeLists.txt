@@ -141,28 +141,14 @@ zlens_add_test(test_storage_task test_storage_task.cpp
     ${CMAKE_SOURCE_DIR}/App/Src/crc16.cpp
 )
 
-# --- SelfTest ---
-zlens_add_test(test_self_test test_self_test.cpp
-    ${CMAKE_SOURCE_DIR}/App/Src/self_test.cpp
-    ${CMAKE_SOURCE_DIR}/App/Src/power_monitor.cpp
-    ${CMAKE_SOURCE_DIR}/App/Src/fram_storage.cpp
-    ${CMAKE_SOURCE_DIR}/App/Src/encoder.cpp
-    ${CMAKE_SOURCE_DIR}/App/Src/motor_ctrl.cpp
-    ${CMAKE_SOURCE_DIR}/App/Src/stall_detect.cpp
-    ${CMAKE_SOURCE_DIR}/App/Src/zoom_table.cpp
-    ${CMAKE_SOURCE_DIR}/App/Src/crc16.cpp
-)
-
 # --- MonitorTask ---
 zlens_add_test(test_monitor_task test_monitor_task.cpp
     ${CMAKE_SOURCE_DIR}/Tasks/Src/monitor_task.cpp
     ${CMAKE_SOURCE_DIR}/App/Src/system_manager.cpp
     ${CMAKE_SOURCE_DIR}/App/Src/power_monitor.cpp
     ${CMAKE_SOURCE_DIR}/App/Src/fram_storage.cpp
-    ${CMAKE_SOURCE_DIR}/App/Src/self_test.cpp
     ${CMAKE_SOURCE_DIR}/App/Src/encoder.cpp
     ${CMAKE_SOURCE_DIR}/App/Src/motor_ctrl.cpp
-    ${CMAKE_SOURCE_DIR}/App/Src/stall_detect.cpp
     ${CMAKE_SOURCE_DIR}/App/Src/zoom_table.cpp
     ${CMAKE_SOURCE_DIR}/App/Src/crc16.cpp
 )

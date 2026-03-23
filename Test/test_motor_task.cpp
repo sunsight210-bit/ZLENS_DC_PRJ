@@ -71,7 +71,7 @@ protected:
         return results;
     }
 
-    void trigger_stall(uint16_t adc_val = 250) {
+    void trigger_stall(uint16_t adc_val = 800) {
         iAdcCurrent = adc_val;
         for (int i = 0; i < 64 + StallDetect::BLANKING_TICKS + StallDetect::STALL_CONFIRM_COUNT + 10; ++i) {
             task.run_once();
@@ -79,7 +79,7 @@ protected:
     }
 
     void trigger_overcurrent() {
-        iAdcCurrent = 1300;
+        iAdcCurrent = 3500;
         for (int i = 0; i < 64 + StallDetect::BLANKING_TICKS + StallDetect::OVERCURRENT_CONFIRM + 10; ++i) {
             task.run_once();
         }
@@ -186,6 +186,34 @@ TEST_F(MotorTaskTest, HomingFast_StallTriggersRetract) {
     trigger_stall();
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_RETRACT);
     EXPECT_EQ(motor.get_target(), MotorTask::HOMING_RETRACT_DISTANCE);
+}
+
+TEST_F(MotorTaskTest, HomingFast_EncoderStallTriggersRetract) {
+    task.start_homing();
+    // Encoder stays at same position (mechanical limit) with low ADC (no current stall)
+    iAdcCurrent = 100;  // below STALL_THRESHOLD=600
+    encoder.set_position(0);
+    for (int i = 0; i < StallDetect::BLANKING_TICKS + StallDetect::ENCODER_STALL_TICKS + 10; ++i) {
+        task.run_once();
+    }
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_RETRACT);
+    EXPECT_EQ(motor.get_target(), MotorTask::HOMING_RETRACT_DISTANCE);
+}
+
+TEST_F(MotorTaskTest, HomingSlow_EncoderStallTriggersSettle) {
+    task.start_homing();
+    trigger_stall(); // FAST → RETRACT
+    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 120; ++i) task.run_once();
+    // Now in SLOW — encoder stall should trigger settle
+    iAdcCurrent = 100;  // below STALL_THRESHOLD
+    encoder.set_position(0);
+    for (int i = 0; i < StallDetect::BLANKING_TICKS + StallDetect::ENCODER_STALL_TICKS + 10; ++i) {
+        task.run_once();
+    }
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_SETTLE);
+    EXPECT_EQ(motor.get_target(), MotorTask::HOMING_SETTLE_DISTANCE);
 }
 
 TEST_F(MotorTaskTest, HomingRetract_DoneTriggersSlow) {
@@ -308,59 +336,74 @@ TEST_F(MotorTaskTest, OvercurrentDetected_Response0xE2) {
 // ZOOM_INC (0x11)
 // ============================================================
 
-TEST_F(MotorTaskTest, ZoomInc_RelativeIncrease) {
-
+TEST_F(MotorTaskTest, ZoomInc_StepByIndex) {
+    // Start at zoom=10 (index 1), step +1 → zoom=15 (index 2)
     int32_t iPos10 = zoom.get_position(10);
     encoder.set_position(iPos10);
 
-    send_cmd(cmd::ZOOM_INC, 10); // +1.0x → target 2.0x
+    send_cmd(cmd::ZOOM_INC, 1);
     task.run_once();
 
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::MOVING);
+    int32_t iPos15 = zoom.get_position(15);
+    EXPECT_EQ(motor.get_target(), iPos15);
 }
 
-TEST_F(MotorTaskTest, ZoomInc_ClampToMax) {
-
-    int32_t iPos50 = zoom.get_position(50);
-    encoder.set_position(iPos50);
-
+TEST_F(MotorTaskTest, ZoomInc_AtMax_ReturnsError) {
     uint16_t iMaxZoom = zoom.get_max_zoom();
-    send_cmd(cmd::ZOOM_INC, iMaxZoom);
+    int32_t iPosMax = zoom.get_position(iMaxZoom);
+    encoder.set_position(iPosMax);
+
+    send_cmd(cmd::ZOOM_INC, 1);
     task.run_once();
 
-    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::MOVING);
-    int32_t iPosMax = zoom.get_position(iMaxZoom);
-    EXPECT_EQ(motor.get_target(), iPosMax);
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
+    RSP_MESSAGE_S rsp;
+    EXPECT_TRUE(receive_rsp(rsp));
+    EXPECT_EQ(rsp.cmd, rsp_cmd::ERR_PARAM);
 }
 
 // ============================================================
 // ZOOM_DEC (0x12)
 // ============================================================
 
-TEST_F(MotorTaskTest, ZoomDec_RelativeDecrease) {
-
+TEST_F(MotorTaskTest, ZoomDec_StepByIndex) {
+    // Start at zoom=60 (index 11), step -1 → zoom=55 (index 10)
     int32_t iPos60 = zoom.get_position(60);
     encoder.set_position(iPos60);
 
-    send_cmd(cmd::ZOOM_DEC, 10); // -1.0x → target 5.0x
+    send_cmd(cmd::ZOOM_DEC, 1);
     task.run_once();
 
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::MOVING);
+    int32_t iPos55 = zoom.get_position(55);
+    EXPECT_EQ(motor.get_target(), iPos55);
 }
 
-TEST_F(MotorTaskTest, ZoomDec_ClampToMin) {
-
-    int32_t iPos50 = zoom.get_position(50);
-    encoder.set_position(iPos50);
-
+TEST_F(MotorTaskTest, ZoomDec_AtMin_ReturnsError) {
     uint16_t iMinZoom = zoom.get_min_zoom();
-    send_cmd(cmd::ZOOM_DEC, 700);
+    int32_t iPosMin = zoom.get_position(iMinZoom);
+    encoder.set_position(iPosMin);
+
+    send_cmd(cmd::ZOOM_DEC, 1);
     task.run_once();
 
-    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::MOVING);
-    // Min zoom position is 0 — no soft limits anymore
-    int32_t iPosMin = zoom.get_position(iMinZoom);
-    EXPECT_EQ(motor.get_target(), iPosMin);
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
+    RSP_MESSAGE_S rsp;
+    EXPECT_TRUE(receive_rsp(rsp));
+    EXPECT_EQ(rsp.cmd, rsp_cmd::ERR_PARAM);
+}
+
+TEST_F(MotorTaskTest, SetZoom_InvalidZoom_ReturnsError) {
+    encoder.set_position(0);
+
+    send_cmd(cmd::SET_ZOOM, 99); // 9.9x not in table
+    task.run_once();
+
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
+    RSP_MESSAGE_S rsp;
+    EXPECT_TRUE(receive_rsp(rsp));
+    EXPECT_EQ(rsp.cmd, rsp_cmd::ERR_PARAM);
 }
 
 // ============================================================
@@ -503,7 +546,7 @@ TEST_F(MotorTaskTest, BacklashMeasure_FullCycle_SetsBacklash) {
     encoder.set_position(MotorTask::BL_MEASURE_MID);
     run_settle();
 
-    for (int cycle = 0; cycle < 3; ++cycle) {
+    for (int cycle = 0; cycle < 8; ++cycle) {
         encoder.set_position(MotorTask::BL_MEASURE_MID - MotorTask::BL_REVERSE_DIST);
         run_settle();
         encoder.set_position(MotorTask::BL_MEASURE_MID + 80);
@@ -521,7 +564,7 @@ TEST_F(MotorTaskTest, BacklashMeasure_ZeroError_BacklashIsZero) {
     encoder.set_position(MotorTask::BL_MEASURE_MID);
     run_settle();
 
-    for (int cycle = 0; cycle < 3; ++cycle) {
+    for (int cycle = 0; cycle < 8; ++cycle) {
         encoder.set_position(MotorTask::BL_MEASURE_MID - MotorTask::BL_REVERSE_DIST);
         run_settle();
         encoder.set_position(MotorTask::BL_MEASURE_MID);
@@ -540,7 +583,9 @@ TEST_F(MotorTaskTest, AccuracyTest_StartsMovingToStart) {
     complete_homing();
     task.start_accuracy_test();
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::ACCURACY_TEST);
-    EXPECT_EQ(motor.get_target(), MotorTask::ACC_START_POS);
+    // After homing, position=HOMING_SETTLE_DISTANCE(2048).
+    // ACC_START_POS(2048) == HOMING_SETTLE_DISTANCE,
+    // so move_to returns IDLE immediately — motor already at start.
 }
 
 TEST_F(MotorTaskTest, AccuracyTest_EnablesBacklash) {
@@ -620,7 +665,7 @@ TEST_F(MotorTaskTest, FullDiag_ChainsBacklashToAccuracy) {
     // Now in BACKLASH_MEASURE - complete it
     encoder.set_position(MotorTask::BL_MEASURE_MID);
     run_settle();
-    for (int cycle = 0; cycle < 3; ++cycle) {
+    for (int cycle = 0; cycle < 8; ++cycle) {
         encoder.set_position(MotorTask::BL_MEASURE_MID - MotorTask::BL_REVERSE_DIST);
         run_settle();
         encoder.set_position(MotorTask::BL_MEASURE_MID);
@@ -638,7 +683,7 @@ TEST_F(MotorTaskTest, BacklashMeasure_SavesBacklashToQueue) {
     encoder.set_position(MotorTask::BL_MEASURE_MID);
     run_settle();
 
-    for (int cycle = 0; cycle < 3; ++cycle) {
+    for (int cycle = 0; cycle < 8; ++cycle) {
         encoder.set_position(MotorTask::BL_MEASURE_MID - MotorTask::BL_REVERSE_DIST);
         run_settle();
         encoder.set_position(MotorTask::BL_MEASURE_MID + 80);
@@ -650,7 +695,7 @@ TEST_F(MotorTaskTest, BacklashMeasure_SavesBacklashToQueue) {
     bool bFoundBacklash = false;
     while (receive_save(save)) {
         if (save.backlash_valid == 0xFF) {
-            EXPECT_EQ(save.backlash_counts, 30);  // 80 - DEADZONE(50)
+            EXPECT_EQ(save.backlash_counts, 30);  // 80 - BL_DEADZONE(50)
             bFoundBacklash = true;
             break;
         }

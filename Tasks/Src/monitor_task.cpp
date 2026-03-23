@@ -10,8 +10,7 @@ namespace zlens {
 void MonitorTask::init(SystemManager* pSm, PowerMonitor* pPm,
                        FramStorage* pFram, TaskHandle_t hMotorTask,
                        IWDG_HandleTypeDef* pHiwdg, uint16_t* pAdcVoltage,
-                       uint16_t* pAdcCurrent, Encoder* pEncoder,
-                       MotorCtrl* pMotor, StallDetect* pStall, ZoomTable* pZoom) {
+                       Encoder* pEncoder, MotorCtrl* pMotor, ZoomTable* pZoom) {
     m_pSm = pSm;
     m_pPm = pPm;
     m_pFram = pFram;
@@ -20,6 +19,7 @@ void MonitorTask::init(SystemManager* pSm, PowerMonitor* pPm,
     m_pAdcVoltage = pAdcVoltage;
     m_pZoom = pZoom;
     m_pEncoder = pEncoder;
+    m_pMotor = pMotor;
     m_bSelfTestDone = false;
     m_bSelfTestPassed = false;
     m_bBootDecided = false;
@@ -27,9 +27,6 @@ void MonitorTask::init(SystemManager* pSm, PowerMonitor* pPm,
     m_bNormalBootStarted = false;
     m_bNeedHomingOnly = false;
     m_bHomingTriggered = false;
-
-    m_SelfTest.init(pPm, pFram, pEncoder, pMotor, pStall,
-                    pAdcVoltage, pAdcCurrent);
 }
 
 void MonitorTask::run_once() {
@@ -55,47 +52,27 @@ void MonitorTask::run_once() {
         }
 
         if (m_bNormalBoot) {
-            if (!m_bNormalBootStarted) {
-                start_normal_boot();
-            } else {
-                run_normal_boot();
-            }
+            start_normal_boot();
         } else if (m_bNeedHomingOnly) {
-            if (!m_bHomingTriggered) {
-                m_bHomingTriggered = true;
-                CMD_MESSAGE_S stCmd = {cmd::HOMING, 0};
-                xQueueSend(g_cmdQueue, &stCmd, 0);
-                m_pSm->transition_to(SYSTEM_STATE_E::HOMING);
-            }
-            // MonitorTask will transition to READY when MotorTask completes homing
-            // (MotorTask sets SYSTEM_STATE_E::READY on homing complete)
+            CMD_MESSAGE_S stCmd = {cmd::HOMING, 0};
+            xQueueSend(g_cmdQueue, &stCmd, 0);
+            m_pSm->transition_to(SYSTEM_STATE_E::HOMING);
+#ifndef BUILD_TESTING
+            swo_printf("[BOOT] Homing-only boot\n");
+#endif
             m_bSelfTestDone = true;
             m_bSelfTestPassed = true;
         } else {
-            // First-time: full self-test
-            if (!m_bSelfTestDone) {
-                if (m_SelfTest.get_phase() == SELF_TEST_PHASE_E::IDLE) {
-                    m_SelfTest.start();
-                }
-
-                bool bDone = m_SelfTest.step(HAL_GetTick());
-                if (bDone) {
-                    m_bSelfTestDone = true;
-                    m_bSelfTestActive = false;
-                    m_bSelfTestPassed = m_SelfTest.get_result().bAllPassed;
-                    if (m_bSelfTestPassed) {
-                        // Trigger homing with full diagnostics chain
-                        CMD_MESSAGE_S stCmd = {cmd::HOMING, 1};
-                        xQueueSend(g_cmdQueue, &stCmd, 0);
-                        m_pSm->transition_to(SYSTEM_STATE_E::HOMING);
-                    } else {
+            // First boot (no valid FRAM): homing with default backlash
+            m_pMotor->set_backlash(384);
+            CMD_MESSAGE_S stCmd = {cmd::HOMING, 0};
+            xQueueSend(g_cmdQueue, &stCmd, 0);
+            m_pSm->transition_to(SYSTEM_STATE_E::HOMING);
 #ifndef BUILD_TESTING
-                        swo_printf("[FAIL] Self-test failed\n");
+            swo_printf("[BOOT] First boot: homing with default backlash\n");
 #endif
-                        m_pSm->transition_to(SYSTEM_STATE_E::ERROR_STATE);
-                    }
-                }
-            }
+            m_bSelfTestDone = true;
+            m_bSelfTestPassed = true;
         }
         break;
 
@@ -108,23 +85,6 @@ void MonitorTask::run_once() {
     case SYSTEM_STATE_E::READY:
         feed_watchdog();
         check_voltage();
-        if (g_bUartSelfTestReq) {
-            g_bUartSelfTestReq = false;
-            // Reset self-test state for re-run, force full self-test
-            m_bSelfTestDone = false;
-            m_bSelfTestPassed = false;
-            m_bBootDecided = true;
-            m_bNormalBoot = false;
-            m_bNormalBootStarted = false;
-            m_bNeedHomingOnly = false;
-            m_bHomingTriggered = false;
-            m_bSelfTestActive = true;
-            m_pSm->transition_to(SYSTEM_STATE_E::SELF_TEST);
-        }
-        // Re-assert SELF_TEST if MotorTask overrode to READY while self-test active
-        if (m_bSelfTestActive && !m_bSelfTestDone) {
-            m_pSm->transition_to(SYSTEM_STATE_E::SELF_TEST);
-        }
         break;
 
     case SYSTEM_STATE_E::ERROR_STATE:
@@ -208,8 +168,7 @@ extern "C" void monitor_task_entry(void* params) {
     task.init(&g_SystemManager, &g_PowerMonitor, &g_FramStorage,
               hMotorTask, &hiwdg,
               const_cast<uint16_t*>(&g_aAdcDmaBuf[1]),
-              const_cast<uint16_t*>(&g_aAdcDmaBuf[0]),
-              &g_Encoder, &g_Motor, &g_StallDetect, &g_ZoomTable);
+              &g_Encoder, &g_Motor, &g_ZoomTable);
 
     g_SystemManager.transition_to(SYSTEM_STATE_E::SELF_TEST);
     swo_printf("[BOOT] ZLENS_DC v1.0 starting...\n");

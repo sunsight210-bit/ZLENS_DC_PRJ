@@ -38,7 +38,8 @@ public:
     static constexpr int32_t HOMING_SETTLE_DISTANCE  = homing::SETTLE_DISTANCE;
     static constexpr int32_t HOMING_FAR_DISTANCE     = homing::FAR_DISTANCE;
     static constexpr uint16_t HOMING_FAST_SPEED = MotorCtrl::MAX_SPEED / 2;
-    static constexpr uint16_t HOMING_SLOW_SPEED = 1500;  // ~35% duty, needed for gearbox stall at limit
+    static constexpr uint16_t HOMING_SLOW_SPEED = 800;    // ~19% duty, slow approach for precise limit
+    static constexpr uint16_t HOMING_SETTLE_SPEED = 1000; // ~23% duty, settle + retract
 
     // Settle detection
     static constexpr uint16_t SETTLE_STABLE_COUNT = 100;  // 100ms at 1ms/tick
@@ -63,7 +64,7 @@ public:
     static constexpr uint16_t STALL_TEST_SPEEDS[3] = {1280, 2133, 3413};  // 30%, 50%, 80% of PWM_ARR
     static constexpr uint16_t STALL_TEST_ZOOM_X10  = 20;    // 2.0x 测试位置
     static constexpr uint16_t STALL_PRINT_INTERVAL = 500;   // ADC 打印间隔 (ms)
-    static constexpr uint16_t HEARTBEAT_INTERVAL   = 5000;  // 心跳间隔 (ms)
+    static constexpr uint16_t HEARTBEAT_INTERVAL   = 500;   // 心跳间隔 (ms) — 缩短用于编码器验证
 
 private:
     MotorCtrl* m_pMotor = nullptr;

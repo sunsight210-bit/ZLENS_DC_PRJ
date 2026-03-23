@@ -8,7 +8,6 @@ using namespace zlens;
 namespace zlens {
     QueueHandle_t g_cmdQueue = nullptr;
     QueueHandle_t g_rspQueue = nullptr;
-    volatile bool g_bUartSelfTestReq = false;
 }
 
 class MonitorTaskTest : public ::testing::Test {
@@ -19,7 +18,6 @@ protected:
     FramStorage fram;
     Encoder encoder;
     MotorCtrl motor;
-    StallDetect stall;
     ZoomTable zoom;
 
     SPI_HandleTypeDef hspi;
@@ -28,7 +26,6 @@ protected:
     IWDG_HandleTypeDef hiwdg;
     TaskHandle_t hMotorTask;
     uint16_t iAdcVoltage = 2017;
-    uint16_t iAdcCurrent = 0;
 
     void SetUp() override {
         mock::get_log().reset();
@@ -46,12 +43,11 @@ protected:
         fram.init(&hspi);
         encoder.init();
         motor.init(&htim3, &hdac, &encoder);
-        stall.init();
         zoom.init();
         zoom.load_defaults();
 
         task.init(&sm, &pm, &fram, hMotorTask, &hiwdg, &iAdcVoltage,
-                  &iAdcCurrent, &encoder, &motor, &stall, &zoom);
+                  &encoder, &motor, &zoom);
     }
 
     // Helper: prepare FRAM with valid params (version 2) for normal boot
@@ -84,25 +80,32 @@ protected:
     }
 };
 
-TEST_F(MonitorTaskTest, FirstBoot_SelfTest_VoltagePass_GoesToSelfTest) {
+TEST_F(MonitorTaskTest, FirstBoot_HomingOnly_DefaultBacklash) {
     sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
     iAdcVoltage = 2017;
-    // FRAM not valid (default) -> first boot -> starts full self-test
-    task.run_once(); // boot decision + start self_test + first step (VOLTAGE)
+    // FRAM not valid (default) -> first boot -> homing only with default backlash
+    task.run_once();
     EXPECT_FALSE(task.is_normal_boot());
-    // Self-test has started, not yet done
-    EXPECT_FALSE(task.is_self_test_done());
+    EXPECT_TRUE(task.is_self_test_done());
+    EXPECT_TRUE(task.is_self_test_passed());
+    EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::HOMING);
+    // Homing command sent
+    CMD_MESSAGE_S stCmd;
+    bool bGotCmd = xQueueReceive(g_cmdQueue, &stCmd, 0) == pdTRUE;
+    EXPECT_TRUE(bGotCmd);
+    EXPECT_EQ(stCmd.cmd, cmd::HOMING);
+    EXPECT_EQ(stCmd.param, 0);  // param=0 → homing only, no diagnostics
+    // Default backlash set
+    EXPECT_EQ(motor.get_backlash(), 384);
 }
 
-TEST_F(MonitorTaskTest, FirstBoot_SelfTest_VoltageFail_Error) {
+TEST_F(MonitorTaskTest, FirstBoot_LowVoltage_StillHomesOnly) {
     sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
-    iAdcVoltage = 1300; // low voltage
-    // First step: boot decision (FRAM invalid) + start self_test + VOLTAGE fail
+    iAdcVoltage = 1300; // low voltage — first boot still does homing
     task.run_once();
-    task.run_once(); // process the step that completes
     EXPECT_TRUE(task.is_self_test_done());
-    EXPECT_FALSE(task.is_self_test_passed());
-    EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::ERROR_STATE);
+    EXPECT_TRUE(task.is_self_test_passed());
+    EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::HOMING);
 }
 
 TEST_F(MonitorTaskTest, NormalBoot_SkipsSelfTest) {
@@ -200,58 +203,20 @@ TEST_F(MonitorTaskTest, HomingOnlyBoot_NotNormalBoot) {
     EXPECT_FALSE(task.is_normal_boot());
 }
 
-TEST_F(MonitorTaskTest, FirstBoot_SelfTestPass_SendsHomingCommand) {
+TEST_F(MonitorTaskTest, FirstBoot_SendsHomingCommand) {
     sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
     iAdcVoltage = 2017;
-    iAdcCurrent = 0;
-    // Boot decision calls load_params which reads primary (60 bytes) + backup (60 bytes),
-    // then test_rw writes+reads 1 byte. Prepend 120 dummy bytes.
-    std::vector<uint8_t> rx_data(2 * sizeof(FRAM_PARAMS_S), 0x00);
-    rx_data.push_back(SelfTest::FRAM_TEST_BYTE);
-    mock::get_log().spi_rx_buffer = rx_data;
+    // First boot: sends homing command (param=0)
+    task.run_once();
 
-    // Run through full self-test: VOLTAGE, BASELINE, FRAM_RW, ENCODER_DIR
-    task.run_once(); // boot decision + start + VOLTAGE
-    task.run_once(); // BASELINE
-    task.run_once(); // FRAM_RW
-    task.run_once(); // ENCODER_DIR_START
-
-    encoder.set_position(SelfTest::ENCODER_DIR_MOVE);
-    // Motor needs SETTLE_TICKS updates before reaching IDLE
-    for (int i = 0; i < 120; ++i) task.run_once();
-
-    // Self-test passed, should send HOMING command
     EXPECT_TRUE(task.is_self_test_done());
     EXPECT_TRUE(task.is_self_test_passed());
 
     CMD_MESSAGE_S stCmd;
     bool bGotCmd = xQueueReceive(g_cmdQueue, &stCmd, 0) == pdTRUE;
     EXPECT_TRUE(bGotCmd);
-    if (bGotCmd) {
-        EXPECT_EQ(stCmd.cmd, cmd::HOMING);
-    }
+    EXPECT_EQ(stCmd.cmd, cmd::HOMING);
     EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::HOMING);
-}
-
-TEST_F(MonitorTaskTest, UartSelfTestReq_TriggersRetest) {
-    // First: get to READY state via normal boot
-    prepare_valid_fram();
-    encoder.set_position(50000);
-
-    sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
-    task.run_once(); // normal boot -> READY
-    EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::READY);
-
-    // Set UART self-test request flag
-    g_bUartSelfTestReq = true;
-    task.run_once();
-
-    // Flag should be cleared
-    EXPECT_FALSE(g_bUartSelfTestReq);
-    // Should transition to SELF_TEST
-    EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::SELF_TEST);
-    // Self-test state should be reset
-    EXPECT_FALSE(task.is_self_test_done());
 }
 
 TEST_F(MonitorTaskTest, ReadyState_FeedsWatchdog) {
@@ -299,8 +264,9 @@ TEST_F(MonitorTaskTest, BusyState_NormalRun) {
     EXPECT_GT(mock::get_log().iwdg_refresh_count, 0u);
 }
 
-TEST_F(MonitorTaskTest, OldVersion1Fram_TriggersFullSelfTest) {
+TEST_F(MonitorTaskTest, OldVersion1Fram_SkipsSelfTest_GoesToReady) {
     // FRAM with version=1 should NOT be treated as normal or homing-only boot
+    // Self-test disabled: goes straight to READY
     FRAM_PARAMS_S p{};
     p.magic_number = FramStorage::MAGIC;
     p.version = 1;  // old version
@@ -315,6 +281,6 @@ TEST_F(MonitorTaskTest, OldVersion1Fram_TriggersFullSelfTest) {
     task.run_once();
 
     EXPECT_FALSE(task.is_normal_boot());
-    // Should start full self-test (not done yet after one run)
-    EXPECT_FALSE(task.is_self_test_done());
+    EXPECT_TRUE(task.is_self_test_done());
+    EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::HOMING);  // FRAM invalid → homing only
 }

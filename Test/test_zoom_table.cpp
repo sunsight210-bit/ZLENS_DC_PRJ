@@ -12,7 +12,7 @@ protected:
         mock::get_log().reset();
         table.init();
         table.load_defaults();
-        // TOTAL_RANGE is now a fixed constant (214648)
+        // TOTAL_RANGE=858592 (214648×4), HOME_OFFSET=2048
     }
 };
 
@@ -33,13 +33,15 @@ TEST_F(ZoomTableTest, InvalidZoom_NotInTable) {
 }
 
 TEST_F(ZoomTableTest, GetPosition_FirstEntry) {
-    EXPECT_EQ(table.get_position(6), 0);
+    // 0.6x @ 0°: HOME_OFFSET + 0 = 2048
+    EXPECT_EQ(table.get_position(6), ZoomTable::HOME_OFFSET);
 }
 
 TEST_F(ZoomTableTest, GetPosition_LastEntry) {
+    // 7.0x @ 347°: HOME_OFFSET + 34700*858592/36000 = 2048+827587 = 829635
     int32_t pos = table.get_position(70);
-    EXPECT_GT(pos, 190000);
-    EXPECT_LT(pos, 210000);
+    EXPECT_GT(pos, 828000);
+    EXPECT_LT(pos, 831000);
 }
 
 TEST_F(ZoomTableTest, GetPosition_InvalidZoom_ReturnsNeg1) {
@@ -48,13 +50,15 @@ TEST_F(ZoomTableTest, GetPosition_InvalidZoom_ReturnsNeg1) {
 
 TEST_F(ZoomTableTest, GetNearestZoom) {
     EXPECT_EQ(table.get_nearest_zoom(0), 6);
-    EXPECT_EQ(table.get_nearest_zoom(5000), 6);
-    EXPECT_EQ(table.get_nearest_zoom(15000), 8);
+    EXPECT_EQ(table.get_nearest_zoom(2048), 6);
+    // Midpoint between 0.6x(2048) and 1.0x(173766) ≈ 87907
+    EXPECT_EQ(table.get_nearest_zoom(87907), 6);
+    EXPECT_EQ(table.get_nearest_zoom(173766), 10);
 }
 
 TEST_F(ZoomTableTest, GetNextZoom_Forward) {
-    EXPECT_EQ(table.get_next_zoom(6, 1), 8);
-    EXPECT_EQ(table.get_next_zoom(60, 1), 70);
+    EXPECT_EQ(table.get_next_zoom(6, 1), 10);
+    EXPECT_EQ(table.get_next_zoom(60, 1), 65);
 }
 
 TEST_F(ZoomTableTest, GetNextZoom_AtMax_Clamps) {
@@ -62,12 +66,13 @@ TEST_F(ZoomTableTest, GetNextZoom_AtMax_Clamps) {
 }
 
 TEST_F(ZoomTableTest, GetNextZoom_Backward) {
-    EXPECT_EQ(table.get_next_zoom(10, -1), 8);
+    EXPECT_EQ(table.get_next_zoom(10, -1), 6);
     EXPECT_EQ(table.get_next_zoom(6, -1), 6);
 }
 
 TEST_F(ZoomTableTest, GetNextZoom_MultiStep) {
-    EXPECT_EQ(table.get_next_zoom(6, 3), 12);
+    // 6 → +3 → index 0+3 = index 3 → zoom_x10=20
+    EXPECT_EQ(table.get_next_zoom(6, 3), 20);
 }
 
 TEST_F(ZoomTableTest, SetEntry_FactoryMode) {
@@ -82,8 +87,8 @@ TEST_F(ZoomTableTest, AngleToPositionConversion) {
     table.erase_all();
     table.set_entry(25, 18000);
     int32_t pos = table.get_position(25);
-    // 18000 * 214648 / 36000 = 107324
-    EXPECT_NEAR(pos, 107324, 2);
+    // HOME_OFFSET + 18000 * 858592 / 36000 = 2048 + 429296 = 431344
+    EXPECT_NEAR(pos, 431344, 2);
 }
 
 TEST_F(ZoomTableTest, MinMaxZoom) {
@@ -95,10 +100,10 @@ TEST_F(ZoomTableTest, TotalRange_IsFixedConstant) {
     ZoomTable zt;
     zt.init();
     zt.load_defaults();
-    // 0.6x at 0° should map to position 0
-    EXPECT_EQ(zt.get_position(6), 0);
-    // 7.0x at 347° should map to ~206821 (34700 * 214648 / 36000)
+    // 0.6x at 0°: HOME_OFFSET + 0 = 2048
+    EXPECT_EQ(zt.get_position(6), ZoomTable::HOME_OFFSET);
+    // 7.0x at 347°: HOME_OFFSET + 34700*858592/36000 = 829635
     int32_t iPos70 = zt.get_position(70);
-    EXPECT_GT(iPos70, 205000);
-    EXPECT_LT(iPos70, 210000);
+    EXPECT_GT(iPos70, 828000);
+    EXPECT_LT(iPos70, 831000);
 }

@@ -71,9 +71,8 @@ void CommTask::dispatch_work_command(uint8_t cmd_byte, uint16_t param) {
         return;
     }
 
-    // Self-test: set flag + ACK
+    // Self-test: ACK only (self-test removed)
     if (cmd_byte == cmd::SELF_TEST) {
-        g_bUartSelfTestReq = true;
         send_uart_frame(cmd::SELF_TEST, rsp::OK);
         return;
     }

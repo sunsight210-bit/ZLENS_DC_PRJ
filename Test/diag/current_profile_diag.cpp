@@ -34,7 +34,6 @@ QueueHandle_t g_cmdQueue = nullptr;
 QueueHandle_t g_rspQueue = nullptr;
 QueueHandle_t g_saveQueue = nullptr;
 volatile bool g_bSpiEmergency = false;
-volatile bool g_bUartSelfTestReq = false;
 
 MotorCtrl g_Motor;
 Encoder g_Encoder;
@@ -49,7 +48,7 @@ volatile uint16_t g_aAdcDmaBuf[2] = {0, 0};
 
 namespace {
 
-constexpr uint16_t SPEEDS[] = {480, 1200, 2400, 3600};
+constexpr uint16_t SPEEDS[] = {480, 1200, 1600, 3200};
 constexpr uint32_t SPEED_COUNT = sizeof(SPEEDS) / sizeof(SPEEDS[0]);
 constexpr int32_t  HOMING_FAR = 1000000;
 constexpr int32_t  HOMING_RETRACT = 8000;

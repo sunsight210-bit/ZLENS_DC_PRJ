@@ -3,7 +3,7 @@
 #include "comm_task.hpp"
 #include "crc16.hpp"
 
-namespace zlens { volatile bool g_bUartSelfTestReq = false; }
+namespace zlens { }
 
 using namespace zlens;
 
@@ -358,11 +358,8 @@ TEST_F(CommTaskTest, FactorySetAngle_Forwards) {
 // Self-test
 // ============================================================
 
-TEST_F(CommTaskTest, SelfTest_SetsFlag_SendsAck) {
-    g_bUartSelfTestReq = false;
+TEST_F(CommTaskTest, SelfTest_SendsAck) {
     send_work_frame(cmd::SELF_TEST, 0);
-
-    EXPECT_TRUE(g_bUartSelfTestReq);
 
     CMD_MESSAGE_S msg;
     EXPECT_FALSE(receive_cmd(msg));

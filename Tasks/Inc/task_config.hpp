@@ -68,7 +68,7 @@ namespace rsp {
     constexpr uint16_t HOMING_DONE_PARAM  = 0x000F;
     constexpr uint16_t ARRIVED_PARAM      = 0x000A;
     constexpr uint16_t REQ_INVALID_PARAM  = 0x000E;
-    constexpr uint16_t FW_VERSION         = 0x1000;  // v1.000
+    constexpr uint16_t FW_VERSION         = 0x0100;  // v1.00 (high=major, low=minor)
     constexpr uint16_t DEFAULT_SPEED_KHZ  = 15;
     constexpr uint16_t POWER_DOWN         = 0x0005;
 } // namespace rsp
@@ -119,7 +119,6 @@ extern QueueHandle_t g_cmdQueue;
 extern QueueHandle_t g_rspQueue;
 extern QueueHandle_t g_saveQueue;
 extern volatile bool g_bSpiEmergency;
-extern volatile bool g_bUartSelfTestReq;
 
 // --- Homing mechanical parameters ---
 namespace homing {
