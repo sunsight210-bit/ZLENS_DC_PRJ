@@ -41,7 +41,7 @@ private:
     QueueHandle_t m_rspQueue = nullptr;
 
     uint16_t m_iCurrentZoom = 60; // default 6.0x (0.6x = 6, 60x = 600)
-    uint16_t m_iSpeedKhz = rsp::DEFAULT_SPEED_PCT;
+    uint16_t m_iSpeedKhz = rsp::DEFAULT_SPEED_KHZ;
     uint16_t m_iStallCount = 0;
 
     void dispatch_work_command(uint8_t cmd, uint16_t param);

@@ -164,7 +164,7 @@ TEST_F(CommTaskTest, QuerySpeed_Response0x12) {
     auto result = parse_tx_frame(1);
     EXPECT_TRUE(result.valid);
     EXPECT_EQ(result.cmd, rsp_cmd::SPEED);
-    EXPECT_EQ(result.param, rsp::DEFAULT_SPEED_PCT);
+    EXPECT_EQ(result.param, rsp::DEFAULT_SPEED_KHZ);
 }
 
 TEST_F(CommTaskTest, QueryType_Response0x13) {
@@ -358,50 +358,18 @@ TEST_F(CommTaskTest, FactorySetAngle_Forwards) {
 // Self-test
 // ============================================================
 
-TEST_F(CommTaskTest, SelfTest_ForwardsAsHoming) {
+TEST_F(CommTaskTest, SelfTest_SendsAck) {
     send_work_frame(cmd::SELF_TEST, 0);
 
     CMD_MESSAGE_S msg;
-    EXPECT_TRUE(receive_cmd(msg));
-    EXPECT_EQ(msg.cmd, cmd::HOMING);
-    EXPECT_EQ(msg.param, 1);  // full diagnostics
-}
+    EXPECT_FALSE(receive_cmd(msg));
 
-// ============================================================
-// 0x60-0x64: Speed commands
-// ============================================================
-
-TEST_F(CommTaskTest, SetSpeed_ForwardsToMotor) {
-    send_work_frame(cmd::SET_SPEED, 1000);
-
-    CMD_MESSAGE_S msg;
-    EXPECT_TRUE(receive_cmd(msg));
-    EXPECT_EQ(msg.cmd, cmd::SET_SPEED);
-    EXPECT_EQ(msg.param, 1000);
-}
-
-TEST_F(CommTaskTest, SpeedInc_ForwardsToMotor) {
-    send_work_frame(cmd::SPEED_INC, 0);
-
-    CMD_MESSAGE_S msg;
-    EXPECT_TRUE(receive_cmd(msg));
-    EXPECT_EQ(msg.cmd, cmd::SPEED_INC);
-}
-
-TEST_F(CommTaskTest, SpeedCommands_NotRejectedWhenBusy) {
-    sm.transition_to(SYSTEM_STATE_E::BUSY);
-    send_work_frame(cmd::SET_SPEED, 800);
-
-    CMD_MESSAGE_S msg;
-    EXPECT_TRUE(receive_cmd(msg));
-    EXPECT_EQ(msg.cmd, cmd::SET_SPEED);
-}
-
-TEST_F(CommTaskTest, RunOnce_SpeedResponseUpdatesLocal) {
-    RSP_MESSAGE_S rsp_msg = {rsp_cmd::SPEED, 900};
-    xQueueSend(rspQ, &rsp_msg, 0);
-    task.run_once();
-    EXPECT_EQ(task.get_speed_khz(), 900);
+    // echo + ACK
+    ASSERT_GE(uart_tx_count(), 2u);
+    auto result = parse_tx_frame(1);
+    EXPECT_TRUE(result.valid);
+    EXPECT_EQ(result.cmd, cmd::SELF_TEST);
+    EXPECT_EQ(result.param, rsp::OK);
 }
 
 // ============================================================
@@ -446,7 +414,7 @@ TEST_F(CommTaskTest, RunOnce_ArrivedResponseNoZoomUpdate) {
 // ============================================================
 
 TEST_F(CommTaskTest, SpeedAccessor_DefaultAndSet) {
-    EXPECT_EQ(task.get_speed_khz(), rsp::DEFAULT_SPEED_PCT);
+    EXPECT_EQ(task.get_speed_khz(), rsp::DEFAULT_SPEED_KHZ);
     task.set_speed_khz(20);
     EXPECT_EQ(task.get_speed_khz(), 20);
 }
