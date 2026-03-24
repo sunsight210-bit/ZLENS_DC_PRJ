@@ -275,16 +275,15 @@ TEST_F(MotorCtrlTest, EncoderTimeout_ResetsOnMovement) {
 
 TEST_F(MotorCtrlTest, SoftLimit_ClampsOvershootTarget) {
     // 0.6x scenario: target=2048 (soft limit), backlash=512
-    // Without clamp: overshoot = 2048 - 512 - 200 = 1336 (below soft limit)
-    // With clamp: overshoot = 2048 (soft limit min)
-    // Since overshoot >= target → skip compensation
+    // Without clamp: overshoot = 2048 - 512 - 200 = 1336
+    // Safe min = 2048/2 = 1024, 1336 > 1024 → not clamped
+    // 1336 < 2048 → compensation applies (two-phase approach)
     motor.set_backlash(512);
     motor.set_backlash_enabled(true);
     motor.set_soft_limit_min(2048);
     encoder.set_position(10000);
     motor.move_to(2048);
-    // Compensation skipped: target = finalTarget = 2048
-    EXPECT_EQ(motor.get_target(), 2048);
+    EXPECT_EQ(motor.get_target(), 1336);  // overshoot target, not clamped
     EXPECT_EQ(motor.get_final_target(), 2048);
     EXPECT_EQ(motor.get_direction(), DIRECTION_E::REVERSE);
 }
@@ -315,28 +314,72 @@ TEST_F(MotorCtrlTest, SoftLimit_ClampsToLimit_PartialCompensation) {
 
 TEST_F(MotorCtrlTest, SoftLimit_ClampedToLimit_StillCompensates) {
     // target=2500, soft limit=2048, backlash=512
-    // overshoot = 2500 - 512 - 200 = 1788 < 2048 → clamped to 2048
-    // 2048 < 2500 → compensation still applies with reduced margin
+    // overshoot = 2500 - 512 - 200 = 1788
+    // safe min = 2048/2 = 1024, 1788 > 1024 → not clamped
     motor.set_backlash(512);
     motor.set_backlash_enabled(true);
     motor.set_soft_limit_min(2048);
     encoder.set_position(10000);
     motor.move_to(2500);
-    EXPECT_EQ(motor.get_target(), 2048);  // clamped to soft limit
+    EXPECT_EQ(motor.get_target(), 1788);  // not clamped (above safe min)
     EXPECT_EQ(motor.get_final_target(), 2500);
 }
 
-TEST_F(MotorCtrlTest, Phase2_NearSoftLimit_SkipsCompensation) {
+TEST_F(MotorCtrlTest, Phase2_NearSoftLimit_CompensationWorks) {
     // 0.6x scenario: target exactly at soft limit
     motor.set_backlash(257);
     motor.set_backlash_enabled(true);
     motor.set_soft_limit_min(2048);
     encoder.set_position(829635);  // 7.0x position
     motor.move_to(2048);
-    // overshoot = 2048 - 257 - 200 = 1591 < 2048 → clamped to 2048
-    // 2048 >= 2048 → skip compensation
-    EXPECT_EQ(motor.get_target(), 2048);
+    // overshoot = 2048 - 257 - 200 = 1591
+    // safe min = 1024, 1591 > 1024 → not clamped
+    // 1591 < 2048 → compensation applies (approach from forward)
+    EXPECT_EQ(motor.get_target(), 1591);
     EXPECT_EQ(motor.get_final_target(), 2048);
+}
+
+TEST_F(MotorCtrlTest, SoftLimit_LargeBacklash_ClampedToSafeMin) {
+    // target=2048, soft limit=2048, backlash=1500
+    // overshoot = 2048 - 1500 - 200 = 348
+    // safe min = 1024, 348 < 1024 → clamped to 1024
+    motor.set_backlash(1500);
+    motor.set_backlash_enabled(true);
+    motor.set_soft_limit_min(2048);
+    encoder.set_position(10000);
+    motor.move_to(2048);
+    EXPECT_EQ(motor.get_target(), 1024);  // clamped to safe min
+    EXPECT_EQ(motor.get_final_target(), 2048);
+}
+
+// --- Safety net brake tests ---
+
+TEST_F(MotorCtrlTest, SafetyNet_BrakesAtSafeLimit) {
+    // Moving reverse with backlash enabled, position at SAFE_LIMIT_MIN → brake
+    motor.set_backlash_enabled(true);
+    motor.set_soft_limit_min(2048);
+    encoder.set_position(5000);
+    motor.move_to(2048);
+    // Simulate motor moving reverse past safe limit
+    encoder.set_position(MotorCtrl::SAFE_LIMIT_MIN);
+    motor.update();
+    // Should have triggered safety brake → APPROACHING (backlash phase 1 → phase 2)
+    // or SETTLING (direct move)
+    auto state = motor.get_state();
+    EXPECT_TRUE(state == MOTOR_STATE_E::APPROACHING || state == MOTOR_STATE_E::SETTLING);
+}
+
+TEST_F(MotorCtrlTest, SafetyNet_NotTriggeredDuringHoming) {
+    // Backlash disabled (homing mode) → safety net should NOT trigger
+    motor.set_backlash_enabled(false);
+    motor.set_soft_limit_min(2048);
+    encoder.set_position(5000);
+    motor.move_to(-100000);
+    encoder.set_position(500);  // well below safe limit
+    motor.update();
+    // Should still be moving, not braked
+    EXPECT_NE(motor.get_state(), MOTOR_STATE_E::SETTLING);
+    EXPECT_NE(motor.get_state(), MOTOR_STATE_E::IDLE);
 }
 
 // --- CRAWL speed tests ---

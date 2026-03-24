@@ -128,8 +128,8 @@ int main(void)
   MX_TIM8_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
-  // === SWO ITM Init ===
-  {
+  // === SWO ITM Init (only when debugger attached) ===
+  if (CoreDebug->DHCSR & CoreDebug_DHCSR_C_DEBUGEN_Msk) {
       CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
       DBGMCU->CR |= DBGMCU_CR_TRACE_IOEN;
       TPI->ACPR = 31;  // 64 MHz / (31+1) = 2 MHz SWO baud

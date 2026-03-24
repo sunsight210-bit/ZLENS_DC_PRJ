@@ -52,6 +52,16 @@ void StorageTask::handle_save(const SAVE_MESSAGE_S& stMsg) {
         m_stParams.backlash_valid = 0xFF;
     }
 
+    // Update homing/position status
+    if (stMsg.homing_done == 1) {
+        m_stParams.homing_done = 1;
+        m_stParams.move_count = 0;  // reset counter after homing
+    }
+    if (stMsg.position_valid == 0xFF) {
+        m_stParams.position_valid = 0xFF;
+        m_stParams.move_count++;
+    }
+
     write_params();
     m_iLastSavedPosition = stMsg.position;
     m_iLastSaveTick = HAL_GetTick();

@@ -232,7 +232,7 @@ void MotorTask::process_moving() {
 #endif
         send_response(rsp_cmd::ZOOM, iZoom);
         send_response(rsp_cmd::ARRIVED, rsp::ARRIVED_PARAM);
-        send_save(save_reason::ARRIVED);
+        send_save(save_reason::ARRIVED, 0, 0xFF);  // position_valid
         m_eTaskState = TASK_STATE_E::IDLE;
         m_pSm->transition_to(SYSTEM_STATE_E::READY);
     }
@@ -266,7 +266,7 @@ void MotorTask::process_homing() {
             uint16_t iZoom = m_pZoom->get_nearest_zoom(iPos);
             send_response(rsp_cmd::ZOOM, iZoom);
             send_response(rsp_cmd::HOMING_DONE, rsp::HOMING_DONE_PARAM);
-            send_save(save_reason::ARRIVED);
+            send_save(save_reason::ARRIVED, 1, 0xFF);  // homing_done + position_valid
 
             if (m_bFullDiagnostics) {
                 // Chain: homing → backlash measurement
@@ -555,7 +555,7 @@ void MotorTask::process_backlash_measure() {
                 int32_t iPos = get_settled_position();
                 uint16_t iZoom = m_pZoom->get_nearest_zoom(iPos);
                 SAVE_MESSAGE_S stSave = {iPos, iZoom, save_reason::ARRIVED,
-                                          iBacklash, 0xFF};
+                                          iBacklash, 0xFF, 0, 0xFF};
                 xQueueSend(m_saveQueue, &stSave, 0);
             }
 
@@ -837,10 +837,10 @@ void MotorTask::send_response(uint8_t cmd, uint16_t param) {
     xQueueSend(m_rspQueue, &stRsp, 0);
 }
 
-void MotorTask::send_save(uint8_t reason) {
+void MotorTask::send_save(uint8_t reason, uint8_t homing_done, uint8_t position_valid) {
     int32_t iPos = m_pEncoder->get_position();
     uint16_t iZoom = m_pZoom->get_nearest_zoom(iPos);
-    SAVE_MESSAGE_S stSave = {iPos, iZoom, reason, 0, 0};
+    SAVE_MESSAGE_S stSave = {iPos, iZoom, reason, 0, 0, homing_done, position_valid};
     xQueueSend(m_saveQueue, &stSave, 0);
 }
 

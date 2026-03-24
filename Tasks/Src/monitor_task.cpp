@@ -42,7 +42,8 @@ void MonitorTask::run_once() {
             bool bValid = m_pFram->load_params(stParams);
             if (bValid && FramStorage::check_magic(stParams) &&
                 FramStorage::verify_crc(stParams) && stParams.version == 2) {
-                if (stParams.position_valid == 0xFF && stParams.homing_done == 1) {
+                if (stParams.position_valid == 0xFF && stParams.homing_done == 1
+                    && stParams.move_count < REHOME_MOVE_COUNT) {
                     m_bNormalBoot = true;
                 } else if (stParams.homing_done == 1) {
                     m_bNeedHomingOnly = true;

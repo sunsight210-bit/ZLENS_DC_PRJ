@@ -284,3 +284,44 @@ TEST_F(MonitorTaskTest, OldVersion1Fram_SkipsSelfTest_GoesToReady) {
     EXPECT_TRUE(task.is_self_test_done());
     EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::HOMING);  // FRAM invalid → homing only
 }
+
+TEST_F(MonitorTaskTest, MoveCountExceeded_ForcesHoming) {
+    // FRAM valid, homing_done=1, position_valid=0xFF but move_count >= 500 → homing
+    FRAM_PARAMS_S p{};
+    p.magic_number = FramStorage::MAGIC;
+    p.version = 2;
+    p.current_position = 50000;
+    p.current_zoom_x10 = 40;
+    p.homing_done = 1;
+    p.position_valid = 0xFF;
+    p.move_count = 500;  // at threshold
+    p.crc16 = FramStorage::calc_crc(p);
+    const uint8_t* pBytes = reinterpret_cast<const uint8_t*>(&p);
+    mock::get_log().spi_rx_buffer.assign(pBytes, pBytes + sizeof(p));
+
+    sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
+    task.run_once();
+
+    EXPECT_FALSE(task.is_normal_boot());
+    EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::HOMING);
+}
+
+TEST_F(MonitorTaskTest, MoveCountBelowThreshold_NormalBoot) {
+    // FRAM valid, move_count < 500 → normal boot
+    FRAM_PARAMS_S p{};
+    p.magic_number = FramStorage::MAGIC;
+    p.version = 2;
+    p.current_position = 50000;
+    p.current_zoom_x10 = 40;
+    p.homing_done = 1;
+    p.position_valid = 0xFF;
+    p.move_count = 499;  // just below threshold
+    p.crc16 = FramStorage::calc_crc(p);
+    const uint8_t* pBytes = reinterpret_cast<const uint8_t*>(&p);
+    mock::get_log().spi_rx_buffer.assign(pBytes, pBytes + sizeof(p));
+
+    sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
+    task.run_once();
+
+    EXPECT_TRUE(task.is_normal_boot());
+}

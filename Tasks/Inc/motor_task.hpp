@@ -152,7 +152,7 @@ private:
     void handle_overcurrent();
     void handle_power_down();
     void send_response(uint8_t cmd, uint16_t param);
-    void send_save(uint8_t reason);
+    void send_save(uint8_t reason, uint8_t homing_done = 0, uint8_t position_valid = 0);
 };
 
 } // namespace zlens

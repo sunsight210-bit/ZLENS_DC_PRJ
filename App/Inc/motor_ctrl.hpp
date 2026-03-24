@@ -31,6 +31,7 @@ public:
     static constexpr uint16_t CRAWL_SPEED = 320;             // ~7.5% duty, final approach
     static constexpr int32_t  POSITION_TOLERANCE = 500;      // max acceptable error after settling
     static constexpr uint8_t  MAX_CORRECTIONS = 2;           // max correction attempts
+    static constexpr int32_t  SAFE_LIMIT_MIN = 1024;         // hard safety brake below this position (HOME_OFFSET/2)
 
     void init(TIM_HandleTypeDef* htim, DAC_HandleTypeDef* hdac, Encoder* encoder);
     void move_to(int32_t target, bool bIsCorrection = false);

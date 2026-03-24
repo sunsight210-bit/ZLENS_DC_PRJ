@@ -2,6 +2,9 @@
 #include "motor_ctrl.hpp"
 #include "hw_constants.hpp"
 #include <cstdlib>
+#ifndef BUILD_TESTING
+#include "swo_debug.hpp"
+#endif
 
 namespace zlens {
 
@@ -54,9 +57,11 @@ void MotorCtrl::move_to(int32_t target, bool bIsCorrection) {
         // Reverse move: two-phase approach
         m_iFinalTarget = target;
         int32_t iOvershoot = target - m_iBacklash - BACKLASH_MARGIN;
-        // Clamp to soft limit minimum (don't crash into mechanical stop)
-        if (iOvershoot < m_iSoftLimitMin) {
-            iOvershoot = m_iSoftLimitMin;
+        // Clamp to safe minimum (half of soft limit — allows backlash
+        // compensation for 0.6X while keeping distance from physical stop)
+        int32_t iSafeMin = m_iSoftLimitMin / 2;
+        if (iOvershoot < iSafeMin) {
+            iOvershoot = iSafeMin;
         }
         // If no room for compensation, skip it
         if (iOvershoot >= target) {
@@ -98,6 +103,29 @@ void MotorCtrl::set_vref_mv(uint16_t mv) {
 
 void MotorCtrl::update() {
     if (m_eState == MOTOR_STATE_E::IDLE || m_eState == MOTOR_STATE_E::STALLED) return;
+
+    // Safety net: hard brake if position drops below safe minimum during normal moves
+    // (gated by m_bBacklashEnabled so homing — which intentionally hits limit — is unaffected)
+    if (m_bBacklashEnabled && m_eDirection == DIRECTION_E::REVERSE) {
+        int32_t pos = m_pEncoder->get_position();
+        if (pos <= SAFE_LIMIT_MIN) {
+#ifndef BUILD_TESTING
+            swo_printf("[SAFETY] brake! pos=%ld target=%ld final=%ld\n",
+                       static_cast<long>(pos), static_cast<long>(m_iTarget),
+                       static_cast<long>(m_iFinalTarget));
+#endif
+            brake();
+            m_iCurrentSpeed = 0;
+            m_iNoMoveCount = 0;
+            m_iSettleCount = 0;
+            if (m_iTarget != m_iFinalTarget) {
+                m_eState = MOTOR_STATE_E::APPROACHING;
+            } else {
+                m_eState = MOTOR_STATE_E::SETTLING;
+            }
+            return;
+        }
+    }
 
     // Handle APPROACHING: start phase 2 (forward to final target)
     if (m_eState == MOTOR_STATE_E::APPROACHING) {
@@ -154,6 +182,12 @@ void MotorCtrl::update() {
     bool bOvershot = (m_eDirection == DIRECTION_E::FORWARD && diff < -iActiveDeadzone) ||
                      (m_eDirection == DIRECTION_E::REVERSE && diff > iActiveDeadzone);
     if (remaining <= iActiveDeadzone || bOvershot) {
+#ifndef BUILD_TESTING
+        swo_printf("[BRAKE] pos=%ld target=%ld final=%ld spd=%u ph2=%d ovs=%d\n",
+                   static_cast<long>(pos), static_cast<long>(m_iTarget),
+                   static_cast<long>(m_iFinalTarget), m_iCurrentSpeed,
+                   m_bPhase2Active ? 1 : 0, bOvershot ? 1 : 0);
+#endif
         brake();
         m_iCurrentSpeed = 0;
         // Check if this was phase 1 of backlash compensation

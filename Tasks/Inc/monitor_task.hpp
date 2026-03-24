@@ -18,6 +18,8 @@ namespace zlens {
 
 class MonitorTask {
 public:
+    static constexpr uint16_t REHOME_MOVE_COUNT = 500;  // force homing after this many zoom moves
+
     void init(SystemManager* pSm, PowerMonitor* pPm,
               FramStorage* pFram, TaskHandle_t hMotorTask,
               IWDG_HandleTypeDef* pHiwdg, uint16_t* pAdcVoltage,

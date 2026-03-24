@@ -34,7 +34,8 @@ struct FRAM_PARAMS_S {
     uint8_t  last_save_reason;
     uint8_t  encoder_compensated;
     uint16_t motor_speed_khz;
-    uint8_t  reserved[14];
+    uint16_t move_count;         // zoom operations since last homing
+    uint8_t  reserved[12];
     uint16_t crc16;
 };
 #pragma pack(pop)
