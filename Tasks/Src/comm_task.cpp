@@ -16,7 +16,7 @@ void CommTask::init(CommProtocol* pComm, SystemManager* pSm, ZoomTable* pZoom,
     m_rspQueue = rspQ;
     m_pHuart = pHuart;
     m_iCurrentZoom = 60; // default 6.0x
-    m_iSpeedKhz = rsp::DEFAULT_SPEED_KHZ;
+    m_iSpeedKhz = rsp::DEFAULT_SPEED_PCT;
     m_iStallCount = 0;
 }
 
@@ -24,9 +24,11 @@ void CommTask::run_once() {
     // Check response queue and forward to UART
     RSP_MESSAGE_S stRsp;
     if (xQueueReceive(m_rspQueue, &stRsp, 0) == pdTRUE) {
-        // Update current zoom if it's a zoom response
+        // Update local state from responses
         if (stRsp.cmd == rsp_cmd::ZOOM) {
             m_iCurrentZoom = stRsp.param;
+        } else if (stRsp.cmd == rsp_cmd::SPEED) {
+            m_iSpeedKhz = stRsp.param;
         }
         send_uart_frame(stRsp.cmd, stRsp.param);
     }
@@ -71,9 +73,17 @@ void CommTask::dispatch_work_command(uint8_t cmd_byte, uint16_t param) {
         return;
     }
 
-    // Self-test: ACK only (self-test removed)
+    // 0x60-0x64: Speed config commands (not motion, always accepted)
+    if (cmd_byte >= cmd::SET_SPEED && cmd_byte <= cmd::SET_MAX_SPEED) {
+        CMD_MESSAGE_S stCmd = {cmd_byte, param};
+        xQueueSend(m_cmdQueue, &stCmd, 0);
+        return;
+    }
+
+    // 0x65: Self-test → forward to MotorTask (triggers homing + diagnostics)
     if (cmd_byte == cmd::SELF_TEST) {
-        send_uart_frame(cmd::SELF_TEST, rsp::OK);
+        CMD_MESSAGE_S stCmd = {cmd::HOMING, 1};  // param=1: full diagnostics
+        xQueueSend(m_cmdQueue, &stCmd, 0);
         return;
     }
 

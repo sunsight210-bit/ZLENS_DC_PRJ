@@ -58,6 +58,10 @@ public:
     void start_accuracy_test();
     void start_stall_current_test();
 
+    static constexpr uint16_t SPEED_STEP_PERCENT = 1;
+    static uint16_t percent_to_pwm(uint16_t iPct);
+    static uint16_t pwm_to_percent(uint16_t iPwm);
+
     // Stall current test constants
     static constexpr uint16_t STALL_TEST_DWELL_MS = 4000;
     static constexpr uint8_t  STALL_TEST_NUM_SPEEDS = 3;

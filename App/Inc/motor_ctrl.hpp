@@ -46,6 +46,7 @@ public:
     int32_t get_target() const { return m_iTarget; }
     int32_t get_final_target() const { return m_iFinalTarget; }
 
+    uint16_t get_max_speed() const { return m_iMaxSpeed; }
     void set_max_speed(uint16_t speed) { m_iMaxSpeed = speed; }
     void set_min_speed(uint16_t speed) { m_iMinSpeed = speed; }
     void set_speed_limit(uint16_t iLimit) { m_iMaxSpeed = iLimit; }

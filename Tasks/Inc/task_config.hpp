@@ -32,8 +32,13 @@ namespace cmd {
     // 0x3X: Cycle zoom
     constexpr uint8_t CYCLE_START    = 0x30;
     constexpr uint8_t CYCLE_STOP     = 0x31;
-    // 0x6X: Self-test
-    constexpr uint8_t SELF_TEST      = 0x60;
+    // 0x6X: CMS16 brushed DC motor commands (lens type 0x04)
+    constexpr uint8_t SET_SPEED      = 0x60;
+    constexpr uint8_t SPEED_INC      = 0x61;
+    constexpr uint8_t SPEED_DEC      = 0x62;
+    constexpr uint8_t SET_MIN_SPEED  = 0x63;
+    constexpr uint8_t SET_MAX_SPEED  = 0x64;
+    constexpr uint8_t SELF_TEST      = 0x65;
     // 0xFX: Mode switch
     constexpr uint8_t SWITCH_FACTORY = 0xFA;
 } // namespace cmd
@@ -69,7 +74,7 @@ namespace rsp {
     constexpr uint16_t ARRIVED_PARAM      = 0x000A;
     constexpr uint16_t REQ_INVALID_PARAM  = 0x000E;
     constexpr uint16_t FW_VERSION         = 0x0100;  // v1.00 (high=major, low=minor)
-    constexpr uint16_t DEFAULT_SPEED_KHZ  = 15;
+    constexpr uint16_t DEFAULT_SPEED_PCT  = 100;  // 100% = MAX_SPEED
     constexpr uint16_t POWER_DOWN         = 0x0005;
 } // namespace rsp
 

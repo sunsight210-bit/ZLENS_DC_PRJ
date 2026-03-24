@@ -198,6 +198,42 @@ void MotorTask::dispatch_command(const CMD_MESSAGE_S& stCmd) {
     case cmd::CYCLE_STOP:
         stop_cycle();
         break;
+    // 0x60-0x64: Speed configuration (accepted in any state)
+    // Protocol uses percent 0-100, mapped to PWM [MIN_SPEED..MAX_SPEED]
+    case cmd::SET_SPEED: {
+        uint16_t iPct = stCmd.param > 100 ? 100 : stCmd.param;
+        m_pMotor->set_speed_limit(percent_to_pwm(iPct));
+        send_response(rsp_cmd::SPEED, iPct);
+        break;
+    }
+    case cmd::SPEED_INC: {
+        uint16_t iPct = pwm_to_percent(m_pMotor->get_max_speed());
+        iPct = (iPct < 100) ? iPct + SPEED_STEP_PERCENT : 100;
+        m_pMotor->set_speed_limit(percent_to_pwm(iPct));
+        send_response(rsp_cmd::SPEED, iPct);
+        break;
+    }
+    case cmd::SPEED_DEC: {
+        uint16_t iPct = pwm_to_percent(m_pMotor->get_max_speed());
+        iPct = (iPct > SPEED_STEP_PERCENT) ? iPct - SPEED_STEP_PERCENT : 0;
+        m_pMotor->set_speed_limit(percent_to_pwm(iPct));
+        send_response(rsp_cmd::SPEED, iPct);
+        break;
+    }
+    case cmd::SET_MIN_SPEED: {
+        uint16_t iPct = stCmd.param > 100 ? 100 : stCmd.param;
+        m_pMotor->set_min_speed(percent_to_pwm(iPct));
+        send_response(rsp_cmd::SPEED, iPct);
+        break;
+    }
+    case cmd::SET_MAX_SPEED: {
+        uint16_t iPct = stCmd.param > 100 ? 100 : stCmd.param;
+        uint16_t iPwm = percent_to_pwm(iPct);
+        m_pMotor->set_max_speed(iPwm);
+        m_pMotor->set_speed_limit(iPwm);
+        send_response(rsp_cmd::SPEED, iPct);
+        break;
+    }
     default:
         break;
     }
@@ -842,6 +878,20 @@ void MotorTask::send_save(uint8_t reason, uint8_t homing_done, uint8_t position_
     uint16_t iZoom = m_pZoom->get_nearest_zoom(iPos);
     SAVE_MESSAGE_S stSave = {iPos, iZoom, reason, 0, 0, homing_done, position_valid};
     xQueueSend(m_saveQueue, &stSave, 0);
+}
+
+uint16_t MotorTask::percent_to_pwm(uint16_t iPct) {
+    if (iPct >= 100) return MotorCtrl::MAX_SPEED;
+    return MotorCtrl::MIN_SPEED
+         + static_cast<uint16_t>(static_cast<uint32_t>(iPct)
+           * (MotorCtrl::MAX_SPEED - MotorCtrl::MIN_SPEED) / 100);
+}
+
+uint16_t MotorTask::pwm_to_percent(uint16_t iPwm) {
+    if (iPwm <= MotorCtrl::MIN_SPEED) return 0;
+    if (iPwm >= MotorCtrl::MAX_SPEED) return 100;
+    return static_cast<uint16_t>(static_cast<uint32_t>(iPwm - MotorCtrl::MIN_SPEED)
+           * 100 / (MotorCtrl::MAX_SPEED - MotorCtrl::MIN_SPEED));
 }
 
 } // namespace zlens
