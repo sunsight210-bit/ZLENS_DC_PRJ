@@ -46,9 +46,18 @@ public:
     int32_t get_target() const { return m_iTarget; }
     int32_t get_final_target() const { return m_iFinalTarget; }
 
+    // Duty ↔ PWM conversion (duty_x10: 0-1000 = 0%-100%)
+    static constexpr uint16_t duty_to_pwm(uint16_t iDuty_x10) {
+        return static_cast<uint16_t>(static_cast<uint32_t>(iDuty_x10) * PWM_ARR / 1000);
+    }
+    static constexpr uint16_t pwm_to_duty(uint16_t iPwm) {
+        return static_cast<uint16_t>(static_cast<uint32_t>(iPwm) * 1000 / PWM_ARR);
+    }
+
     void set_max_speed(uint16_t speed) { m_iMaxSpeed = speed; }
     void set_min_speed(uint16_t speed) { m_iMinSpeed = speed; }
     void set_speed_limit(uint16_t iLimit) { m_iMaxSpeed = iLimit; }
+    uint16_t get_max_speed() const { return m_iMaxSpeed; }
     void set_backlash(int16_t iCounts) { m_iBacklash = iCounts; }
     void set_backlash_enabled(bool bEnabled) { m_bBacklashEnabled = bEnabled; }
     void set_soft_limit_min(int32_t iMin) { m_iSoftLimitMin = iMin; }
@@ -67,7 +76,7 @@ private:
     uint16_t m_iMaxSpeed = MAX_SPEED;
     uint16_t m_iMinSpeed = MIN_SPEED;
 
-    int16_t m_iBacklash = 384;
+    int16_t m_iBacklash = 512;
     bool m_bBacklashEnabled = false;
     int32_t m_iFinalTarget = 0;
     int32_t m_iSoftLimitMin = 0;

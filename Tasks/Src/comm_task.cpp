@@ -16,7 +16,7 @@ void CommTask::init(CommProtocol* pComm, SystemManager* pSm, ZoomTable* pZoom,
     m_rspQueue = rspQ;
     m_pHuart = pHuart;
     m_iCurrentZoom = 60; // default 6.0x
-    m_iSpeedKhz = rsp::DEFAULT_SPEED_KHZ;
+    m_iSpeedDuty = rsp::DEFAULT_SPEED_DUTY;
     m_iStallCount = 0;
 }
 
@@ -27,6 +27,9 @@ void CommTask::run_once() {
         // Update current zoom if it's a zoom response
         if (stRsp.cmd == rsp_cmd::ZOOM) {
             m_iCurrentZoom = stRsp.param;
+        }
+        if (stRsp.cmd == rsp_cmd::SPEED) {
+            m_iSpeedDuty = stRsp.param;
         }
         send_uart_frame(stRsp.cmd, stRsp.param);
     }
@@ -71,9 +74,10 @@ void CommTask::dispatch_work_command(uint8_t cmd_byte, uint16_t param) {
         return;
     }
 
-    // Self-test: ACK only (self-test removed)
-    if (cmd_byte == cmd::SELF_TEST) {
-        send_uart_frame(cmd::SELF_TEST, rsp::OK);
+    // 0x60-0x65: Speed commands + SELF_TEST → forward to MotorTask, no busy check
+    if (cmd_byte >= cmd::SET_SPEED && cmd_byte <= cmd::SELF_TEST) {
+        CMD_MESSAGE_S stCmd = {cmd_byte, param};
+        xQueueSend(m_cmdQueue, &stCmd, 0);
         return;
     }
 
@@ -109,7 +113,7 @@ void CommTask::handle_query(uint8_t cmd_byte) {
         send_uart_frame(rsp_cmd::STATUS, m_pSm->get_status_code());
         break;
     case cmd::QUERY_SPEED:
-        send_uart_frame(rsp_cmd::SPEED, m_iSpeedKhz);
+        send_uart_frame(rsp_cmd::SPEED, m_iSpeedDuty);
         break;
     case cmd::QUERY_TYPE:
         send_uart_frame(rsp_cmd::TYPE, rsp::LENS_TYPE);

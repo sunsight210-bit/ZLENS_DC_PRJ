@@ -62,6 +62,13 @@ void StorageTask::handle_save(const SAVE_MESSAGE_S& stMsg) {
         m_stParams.move_count++;
     }
 
+    // Update speed settings if valid
+    if (stMsg.speed_valid == 1) {
+        m_stParams.speed_duty     = stMsg.speed_duty;
+        m_stParams.min_speed_duty = stMsg.min_speed_duty;
+        m_stParams.max_speed_duty = stMsg.max_speed_duty;
+    }
+
     write_params();
     m_iLastSavedPosition = stMsg.position;
     m_iLastSaveTick = HAL_GetTick();
@@ -83,7 +90,7 @@ void StorageTask::do_periodic_save() {
 
 void StorageTask::write_params() {
     m_stParams.magic_number = FramStorage::MAGIC;
-    m_stParams.version = 2;
+    m_stParams.version = 3;
     m_stParams.crc16 = FramStorage::calc_crc(m_stParams);
     m_pFram->save_params(m_stParams);
 }

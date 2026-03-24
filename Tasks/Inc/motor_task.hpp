@@ -57,6 +57,7 @@ public:
     void start_backlash_measure();
     void start_accuracy_test();
     void start_stall_current_test();
+    void restore_speed(uint16_t iSpeedDuty, uint16_t iMinDuty, uint16_t iMaxDuty);
 
     // Stall current test constants
     static constexpr uint16_t STALL_TEST_DWELL_MS = 4000;
@@ -84,6 +85,11 @@ private:
     bool m_bHomingDone = false;
     bool m_bFullDiagnostics = false;
     bool m_bStallTestPending = false;
+
+    // Speed state (0x60 group)
+    uint16_t m_iSpeedDuty    = rsp::DEFAULT_SPEED_DUTY;
+    uint16_t m_iMinSpeedDuty = rsp::DEFAULT_MIN_SPEED_DUTY;
+    uint16_t m_iMaxSpeedDuty = rsp::DEFAULT_MAX_SPEED_DUTY;
 
     // Cycling
     int8_t m_iCycleStep = 1;
@@ -151,8 +157,10 @@ private:
     void handle_stall();
     void handle_overcurrent();
     void handle_power_down();
+    void apply_speed_to_motor();
     void send_response(uint8_t cmd, uint16_t param);
-    void send_save(uint8_t reason, uint8_t homing_done = 0, uint8_t position_valid = 0);
+    void send_save(uint8_t reason, uint8_t homing_done = 0,
+                   uint8_t position_valid = 0, bool bSaveSpeed = false);
 };
 
 } // namespace zlens

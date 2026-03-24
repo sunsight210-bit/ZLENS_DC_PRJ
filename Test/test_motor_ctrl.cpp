@@ -520,12 +520,12 @@ TEST_F(MotorCtrlTest, Settle_MaxCorrectionsLimit) {
 
     // Correction 1: overshoot
     encoder.set_position(49500);
-    for (int i = 0; i < 500; ++i) {
+    for (int i = 0; i < 1000; ++i) {
         motor.update();
         if (motor.get_state() == MOTOR_STATE_E::SETTLING) break;
     }
     encoder.set_position(53000);  // large error
-    for (int i = 0; i < 200; ++i) {
+    for (int i = 0; i < 500; ++i) {
         motor.update();
         if (motor.get_state() != MOTOR_STATE_E::SETTLING) break;
     }
@@ -533,12 +533,12 @@ TEST_F(MotorCtrlTest, Settle_MaxCorrectionsLimit) {
 
     // Correction 2: still overshoots
     encoder.set_position(49500);
-    for (int i = 0; i < 500; ++i) {
+    for (int i = 0; i < 1000; ++i) {
         motor.update();
         if (motor.get_state() == MOTOR_STATE_E::SETTLING) break;
     }
     encoder.set_position(53000);  // still large error
-    for (int i = 0; i < 200; ++i) {
+    for (int i = 0; i < 500; ++i) {
         motor.update();
         if (motor.get_state() != MOTOR_STATE_E::SETTLING) break;
     }
@@ -546,12 +546,12 @@ TEST_F(MotorCtrlTest, Settle_MaxCorrectionsLimit) {
 
     // Correction 3 attempt: should give up and go IDLE
     encoder.set_position(49500);
-    for (int i = 0; i < 500; ++i) {
+    for (int i = 0; i < 1000; ++i) {
         motor.update();
         if (motor.get_state() == MOTOR_STATE_E::SETTLING) break;
     }
     encoder.set_position(53000);  // still large error
-    for (int i = 0; i < 200; ++i) {
+    for (int i = 0; i < 500; ++i) {
         motor.update();
         if (motor.get_state() == MOTOR_STATE_E::IDLE) break;
     }

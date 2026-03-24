@@ -47,7 +47,7 @@ CMD_QUERY_RANGE   = 0x24
 CMD_QUERY_VERSION = 0x25
 CMD_CYCLE_START   = 0x30
 CMD_CYCLE_STOP    = 0x31
-CMD_SELF_TEST     = 0x60
+CMD_SELF_TEST     = 0x65
 CMD_SWITCH_FACTORY = 0xFA
 
 # Response commands (rsp_cmd namespace)
@@ -69,7 +69,7 @@ RSP_STALL_COUNT = 0xE3
 # Response param constants
 LENS_TYPE          = 0x0004
 FW_VERSION         = 0x1000  # v1.000
-DEFAULT_SPEED_KHZ  = 15
+DEFAULT_SPEED_DUTY = 188
 REQ_INVALID_PARAM  = 0x000E
 
 
@@ -190,8 +190,8 @@ class Phase6Verify:
         if resp:
             self.check(resp['cmd'] == RSP_SPEED,
                        f"rsp cmd=0x{resp['cmd']:02X} == 0x12 (SPEED)")
-            self.check(resp['param'] == DEFAULT_SPEED_KHZ,
-                       f"speed = {resp['param']} kHz == {DEFAULT_SPEED_KHZ}")
+            self.check(resp['param'] == DEFAULT_SPEED_DUTY,
+                       f"speed_duty = {resp['param']} == {DEFAULT_SPEED_DUTY}")
 
     def test_query_type(self):
         print("\n--- 4. Query Type (0x23) → rsp cmd=0x13 ---")
@@ -243,15 +243,11 @@ class Phase6Verify:
             print(f"    stall count = {resp['param']}")
 
     def test_self_test_command(self):
-        print("\n--- 8. Self-Test (0x60) → echo + ACK ---")
+        print("\n--- 8. Self-Test (0x65) → echo + forwarded to MotorTask ---")
         echo, resp = self.proto.send_and_receive_with_echo(CMD_SELF_TEST)
         self.verify_echo(echo, CMD_SELF_TEST, 0, "echo")
-        self.check(resp is not None, "ACK received")
-        if resp:
-            self.check(resp['cmd'] == CMD_SELF_TEST,
-                       f"rsp cmd=0x{resp['cmd']:02X} == 0x60")
-            self.check(resp['param'] == 0x0000,
-                       f"param = 0x{resp['param']:04X} == OK")
+        # 0x65 is now forwarded to MotorTask (triggers full diagnostics)
+        # Response depends on motor state; just verify echo was correct
 
     def run_all(self):
         print("=" * 55)

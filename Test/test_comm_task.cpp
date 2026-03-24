@@ -164,7 +164,7 @@ TEST_F(CommTaskTest, QuerySpeed_Response0x12) {
     auto result = parse_tx_frame(1);
     EXPECT_TRUE(result.valid);
     EXPECT_EQ(result.cmd, rsp_cmd::SPEED);
-    EXPECT_EQ(result.param, rsp::DEFAULT_SPEED_KHZ);
+    EXPECT_EQ(result.param, rsp::DEFAULT_SPEED_DUTY);
 }
 
 TEST_F(CommTaskTest, QueryType_Response0x13) {
@@ -358,18 +358,12 @@ TEST_F(CommTaskTest, FactorySetAngle_Forwards) {
 // Self-test
 // ============================================================
 
-TEST_F(CommTaskTest, SelfTest_SendsAck) {
+TEST_F(CommTaskTest, SelfTest0x65_ForwardsToMotor) {
     send_work_frame(cmd::SELF_TEST, 0);
 
     CMD_MESSAGE_S msg;
-    EXPECT_FALSE(receive_cmd(msg));
-
-    // echo + ACK
-    ASSERT_GE(uart_tx_count(), 2u);
-    auto result = parse_tx_frame(1);
-    EXPECT_TRUE(result.valid);
-    EXPECT_EQ(result.cmd, cmd::SELF_TEST);
-    EXPECT_EQ(result.param, rsp::OK);
+    EXPECT_TRUE(receive_cmd(msg));
+    EXPECT_EQ(msg.cmd, cmd::SELF_TEST);
 }
 
 // ============================================================
@@ -414,9 +408,82 @@ TEST_F(CommTaskTest, RunOnce_ArrivedResponseNoZoomUpdate) {
 // ============================================================
 
 TEST_F(CommTaskTest, SpeedAccessor_DefaultAndSet) {
-    EXPECT_EQ(task.get_speed_khz(), rsp::DEFAULT_SPEED_KHZ);
-    task.set_speed_khz(20);
-    EXPECT_EQ(task.get_speed_khz(), 20);
+    EXPECT_EQ(task.get_speed_duty(), rsp::DEFAULT_SPEED_DUTY);
+    task.set_speed_duty(200);
+    EXPECT_EQ(task.get_speed_duty(), 200);
+}
+
+// ============================================================
+// Stall count accessor
+// ============================================================
+
+// ============================================================
+// 0x60 Speed commands: forwarded, not blocked by busy
+// ============================================================
+
+TEST_F(CommTaskTest, SetSpeed_ForwardsToMotor) {
+    send_work_frame(cmd::SET_SPEED, 500);
+
+    CMD_MESSAGE_S msg;
+    EXPECT_TRUE(receive_cmd(msg));
+    EXPECT_EQ(msg.cmd, cmd::SET_SPEED);
+    EXPECT_EQ(msg.param, 500);
+}
+
+TEST_F(CommTaskTest, SpeedInc_ForwardsToMotor) {
+    send_work_frame(cmd::SPEED_INC, 0);
+
+    CMD_MESSAGE_S msg;
+    EXPECT_TRUE(receive_cmd(msg));
+    EXPECT_EQ(msg.cmd, cmd::SPEED_INC);
+}
+
+TEST_F(CommTaskTest, SpeedDec_ForwardsToMotor) {
+    send_work_frame(cmd::SPEED_DEC, 0);
+
+    CMD_MESSAGE_S msg;
+    EXPECT_TRUE(receive_cmd(msg));
+    EXPECT_EQ(msg.cmd, cmd::SPEED_DEC);
+}
+
+TEST_F(CommTaskTest, SetMinSpeed_ForwardsToMotor) {
+    send_work_frame(cmd::SET_MIN_SPEED, 100);
+
+    CMD_MESSAGE_S msg;
+    EXPECT_TRUE(receive_cmd(msg));
+    EXPECT_EQ(msg.cmd, cmd::SET_MIN_SPEED);
+    EXPECT_EQ(msg.param, 100);
+}
+
+TEST_F(CommTaskTest, SetMaxSpeed_ForwardsToMotor) {
+    send_work_frame(cmd::SET_MAX_SPEED, 800);
+
+    CMD_MESSAGE_S msg;
+    EXPECT_TRUE(receive_cmd(msg));
+    EXPECT_EQ(msg.cmd, cmd::SET_MAX_SPEED);
+    EXPECT_EQ(msg.param, 800);
+}
+
+TEST_F(CommTaskTest, SpeedCommands_NotBlockedByBusy) {
+    sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
+    sm.transition_to(SYSTEM_STATE_E::HOMING);
+    sm.transition_to(SYSTEM_STATE_E::READY);
+    sm.transition_to(SYSTEM_STATE_E::BUSY);
+
+    send_work_frame(cmd::SET_SPEED, 300);
+
+    CMD_MESSAGE_S msg;
+    EXPECT_TRUE(receive_cmd(msg));
+    EXPECT_EQ(msg.cmd, cmd::SET_SPEED);
+}
+
+TEST_F(CommTaskTest, RunOnce_SpeedResponseUpdatesCache) {
+    RSP_MESSAGE_S rsp_msg = {rsp_cmd::SPEED, 500};
+    xQueueSend(rspQ, &rsp_msg, 0);
+
+    task.run_once();
+
+    EXPECT_EQ(task.get_speed_duty(), 500);
 }
 
 // ============================================================

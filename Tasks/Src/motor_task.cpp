@@ -198,6 +198,57 @@ void MotorTask::dispatch_command(const CMD_MESSAGE_S& stCmd) {
     case cmd::CYCLE_STOP:
         stop_cycle();
         break;
+    // 0x60-0x64: Speed commands
+    case cmd::SET_SPEED: {
+        uint16_t iDuty = stCmd.param;
+        if (iDuty > 1000) iDuty = 1000;
+        if (iDuty < m_iMinSpeedDuty) iDuty = m_iMinSpeedDuty;
+        if (iDuty > m_iMaxSpeedDuty) iDuty = m_iMaxSpeedDuty;
+        m_iSpeedDuty = iDuty;
+        apply_speed_to_motor();
+        send_response(rsp_cmd::SPEED, m_iSpeedDuty);
+        send_save(save_reason::ARRIVED, 0, 0, true);
+        break;
+    }
+    case cmd::SPEED_INC:
+        if (m_iSpeedDuty < m_iMaxSpeedDuty) ++m_iSpeedDuty;
+        apply_speed_to_motor();
+        send_response(rsp_cmd::SPEED, m_iSpeedDuty);
+        break;
+    case cmd::SPEED_DEC:
+        if (m_iSpeedDuty > m_iMinSpeedDuty) --m_iSpeedDuty;
+        apply_speed_to_motor();
+        send_response(rsp_cmd::SPEED, m_iSpeedDuty);
+        break;
+    case cmd::SET_MIN_SPEED: {
+        uint16_t iDuty = stCmd.param;
+        if (iDuty > 1000) iDuty = 1000;
+        m_iMinSpeedDuty = iDuty;
+        if (m_iSpeedDuty < m_iMinSpeedDuty) {
+            m_iSpeedDuty = m_iMinSpeedDuty;
+            apply_speed_to_motor();
+        }
+        send_response(rsp_cmd::SPEED, m_iMinSpeedDuty);
+        send_save(save_reason::ARRIVED, 0, 0, true);
+        break;
+    }
+    case cmd::SET_MAX_SPEED: {
+        uint16_t iDuty = stCmd.param;
+        if (iDuty > 1000) iDuty = 1000;
+        m_iMaxSpeedDuty = iDuty;
+        if (m_iSpeedDuty > m_iMaxSpeedDuty) {
+            m_iSpeedDuty = m_iMaxSpeedDuty;
+            apply_speed_to_motor();
+        }
+        send_response(rsp_cmd::SPEED, m_iMaxSpeedDuty);
+        send_save(save_reason::ARRIVED, 0, 0, true);
+        break;
+    }
+    case cmd::SELF_TEST:
+        if (m_eTaskState != TASK_STATE_E::IDLE) break;
+        m_pSm->transition_to(SYSTEM_STATE_E::HOMING);
+        start_homing(true);
+        break;
     default:
         break;
     }
@@ -258,7 +309,7 @@ void MotorTask::process_homing() {
         if (m_pMotor->get_state() == MOTOR_STATE_E::IDLE) {
             // Settle done → homing complete
             m_pMotor->set_min_speed(MotorCtrl::MIN_SPEED);
-            m_pMotor->set_speed_limit(MotorCtrl::MAX_SPEED);
+            apply_speed_to_motor();  // restore user-configured speed
             m_pMotor->set_backlash_enabled(true);
             m_bHomingDone = true;
             m_pStall->reset();
@@ -806,7 +857,7 @@ void MotorTask::process_stall_current_test() {
             // All speeds done
             if (!is_settled()) return;
             print_stall_current_report();
-            m_pMotor->set_speed_limit(MotorCtrl::MAX_SPEED);
+            apply_speed_to_motor();  // restore user-configured speed
             m_pStall->reset();
             m_eTaskState = TASK_STATE_E::IDLE;
             m_pSm->transition_to(SYSTEM_STATE_E::READY);
@@ -837,10 +888,26 @@ void MotorTask::send_response(uint8_t cmd, uint16_t param) {
     xQueueSend(m_rspQueue, &stRsp, 0);
 }
 
-void MotorTask::send_save(uint8_t reason, uint8_t homing_done, uint8_t position_valid) {
+void MotorTask::apply_speed_to_motor() {
+    m_pMotor->set_speed_limit(MotorCtrl::duty_to_pwm(m_iSpeedDuty));
+}
+
+void MotorTask::restore_speed(uint16_t iSpeedDuty, uint16_t iMinDuty, uint16_t iMaxDuty) {
+    m_iMinSpeedDuty = (iMinDuty > 0) ? iMinDuty : rsp::DEFAULT_MIN_SPEED_DUTY;
+    m_iMaxSpeedDuty = (iMaxDuty > 0) ? iMaxDuty : rsp::DEFAULT_MAX_SPEED_DUTY;
+    m_iSpeedDuty = iSpeedDuty;
+    if (m_iSpeedDuty < m_iMinSpeedDuty) m_iSpeedDuty = m_iMinSpeedDuty;
+    if (m_iSpeedDuty > m_iMaxSpeedDuty) m_iSpeedDuty = m_iMaxSpeedDuty;
+    apply_speed_to_motor();
+}
+
+void MotorTask::send_save(uint8_t reason, uint8_t homing_done,
+                          uint8_t position_valid, bool bSaveSpeed) {
     int32_t iPos = m_pEncoder->get_position();
     uint16_t iZoom = m_pZoom->get_nearest_zoom(iPos);
-    SAVE_MESSAGE_S stSave = {iPos, iZoom, reason, 0, 0, homing_done, position_valid};
+    SAVE_MESSAGE_S stSave = {iPos, iZoom, reason, 0, 0, homing_done, position_valid,
+                             m_iSpeedDuty, m_iMinSpeedDuty, m_iMaxSpeedDuty,
+                             static_cast<uint8_t>(bSaveSpeed ? 1 : 0)};
     xQueueSend(m_saveQueue, &stSave, 0);
 }
 
@@ -855,6 +922,20 @@ extern "C" void motor_task_entry(void* params) {
     task.init(&g_Motor, &g_Encoder, &g_StallDetect, &g_ZoomTable,
               &g_FramStorage, &g_SystemManager, g_cmdQueue, g_rspQueue,
               g_saveQueue, const_cast<uint16_t*>(&g_aAdcDmaBuf[0]));
+
+    // Restore speed from FRAM (version >= 3)
+    {
+        FRAM_PARAMS_S stParams;
+        if (g_FramStorage.load_params(stParams) &&
+            FramStorage::verify_crc(stParams) && FramStorage::check_magic(stParams) &&
+            stParams.version >= 3) {
+            task.restore_speed(stParams.speed_duty, stParams.min_speed_duty,
+                               stParams.max_speed_duty);
+            swo_printf("[MOTOR] Speed restored: duty=%u min=%u max=%u\n",
+                       stParams.speed_duty, stParams.min_speed_duty,
+                       stParams.max_speed_duty);
+        }
+    }
 
     swo_printf("[MOTOR] Task started\n");
 

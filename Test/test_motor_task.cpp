@@ -735,3 +735,260 @@ TEST_F(MotorTaskTest, HomingCmd_Param1_FullDiag) {
     // Should chain to BACKLASH_MEASURE because param=1
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::BACKLASH_MEASURE);
 }
+
+// ============================================================
+// duty_to_pwm / pwm_to_duty conversion
+// ============================================================
+
+TEST_F(MotorTaskTest, DutyToPwm_BoundaryValues) {
+    EXPECT_EQ(MotorCtrl::duty_to_pwm(0), 0);
+    EXPECT_EQ(MotorCtrl::duty_to_pwm(1000), MotorCtrl::PWM_ARR);
+    // DEFAULT_SPEED_DUTY(188) → PWM≈800
+    uint16_t iPwm = MotorCtrl::duty_to_pwm(rsp::DEFAULT_SPEED_DUTY);
+    EXPECT_NEAR(iPwm, 800, 5);
+    // DEFAULT_MIN_SPEED_DUTY(112) ≈ MIN_SPEED(480)
+    uint16_t iPwmMin = MotorCtrl::duty_to_pwm(rsp::DEFAULT_MIN_SPEED_DUTY);
+    EXPECT_NEAR(iPwmMin, MotorCtrl::MIN_SPEED, 5);
+}
+
+TEST_F(MotorTaskTest, PwmToDuty_RoundTrip) {
+    uint16_t iDuty = 500;
+    uint16_t iPwm = MotorCtrl::duty_to_pwm(iDuty);
+    uint16_t iBack = MotorCtrl::pwm_to_duty(iPwm);
+    EXPECT_NEAR(iBack, iDuty, 1);
+}
+
+// ============================================================
+// 0x60 Speed Commands
+// ============================================================
+
+TEST_F(MotorTaskTest, SetSpeed_SetsSpeedAndResponds) {
+    send_cmd(cmd::SET_SPEED, 200);
+    task.run_once();
+
+    RSP_MESSAGE_S rsp;
+    EXPECT_TRUE(receive_rsp(rsp));
+    EXPECT_EQ(rsp.cmd, rsp_cmd::SPEED);
+    EXPECT_EQ(rsp.param, 200);
+
+    // Motor speed limit should be updated
+    EXPECT_EQ(motor.get_max_speed(), MotorCtrl::duty_to_pwm(200));
+}
+
+TEST_F(MotorTaskTest, SetSpeed_ClampsToMaxDuty) {
+    // Default max is 281, so 500 should clamp to 281
+    send_cmd(cmd::SET_SPEED, 500);
+    task.run_once();
+
+    RSP_MESSAGE_S rsp;
+    EXPECT_TRUE(receive_rsp(rsp));
+    EXPECT_EQ(rsp.cmd, rsp_cmd::SPEED);
+    EXPECT_EQ(rsp.param, rsp::DEFAULT_MAX_SPEED_DUTY);
+}
+
+TEST_F(MotorTaskTest, SetSpeed_ClampsToMinDuty) {
+    // Default min is 112, so 50 should clamp to 112
+    send_cmd(cmd::SET_SPEED, 50);
+    task.run_once();
+
+    RSP_MESSAGE_S rsp;
+    EXPECT_TRUE(receive_rsp(rsp));
+    EXPECT_EQ(rsp.cmd, rsp_cmd::SPEED);
+    EXPECT_EQ(rsp.param, rsp::DEFAULT_MIN_SPEED_DUTY);
+}
+
+TEST_F(MotorTaskTest, SetSpeed_Clamps1500To1000ThenToMax) {
+    // First raise max to 1000
+    send_cmd(cmd::SET_MAX_SPEED, 1000);
+    task.run_once();
+    drain_rsp();
+
+    send_cmd(cmd::SET_SPEED, 1500);
+    task.run_once();
+
+    RSP_MESSAGE_S rsp;
+    EXPECT_TRUE(receive_rsp(rsp));
+    EXPECT_EQ(rsp.cmd, rsp_cmd::SPEED);
+    EXPECT_EQ(rsp.param, 1000);
+}
+
+TEST_F(MotorTaskTest, SetSpeed_SavesSpeedToQueue) {
+    send_cmd(cmd::SET_SPEED, 200);
+    task.run_once();
+
+    SAVE_MESSAGE_S save;
+    EXPECT_TRUE(receive_save(save));
+    EXPECT_EQ(save.speed_valid, 1);
+    EXPECT_EQ(save.speed_duty, 200);
+    EXPECT_EQ(save.min_speed_duty, rsp::DEFAULT_MIN_SPEED_DUTY);
+    EXPECT_EQ(save.max_speed_duty, rsp::DEFAULT_MAX_SPEED_DUTY);
+}
+
+TEST_F(MotorTaskTest, SpeedInc_IncrementsBy1) {
+    // Set speed to 200 first
+    send_cmd(cmd::SET_SPEED, 200);
+    task.run_once();
+    drain_rsp();
+
+    send_cmd(cmd::SPEED_INC, 0);
+    task.run_once();
+
+    RSP_MESSAGE_S rsp;
+    EXPECT_TRUE(receive_rsp(rsp));
+    EXPECT_EQ(rsp.cmd, rsp_cmd::SPEED);
+    EXPECT_EQ(rsp.param, 201);
+}
+
+TEST_F(MotorTaskTest, SpeedInc_ClampsAtMax) {
+    // Set speed to max first
+    send_cmd(cmd::SET_SPEED, rsp::DEFAULT_MAX_SPEED_DUTY);
+    task.run_once();
+    drain_rsp();
+
+    send_cmd(cmd::SPEED_INC, 0);
+    task.run_once();
+
+    RSP_MESSAGE_S rsp;
+    EXPECT_TRUE(receive_rsp(rsp));
+    EXPECT_EQ(rsp.param, rsp::DEFAULT_MAX_SPEED_DUTY);
+}
+
+TEST_F(MotorTaskTest, SpeedDec_DecrementsBy1) {
+    send_cmd(cmd::SET_SPEED, 200);
+    task.run_once();
+    drain_rsp();
+
+    send_cmd(cmd::SPEED_DEC, 0);
+    task.run_once();
+
+    RSP_MESSAGE_S rsp;
+    EXPECT_TRUE(receive_rsp(rsp));
+    EXPECT_EQ(rsp.cmd, rsp_cmd::SPEED);
+    EXPECT_EQ(rsp.param, 199);
+}
+
+TEST_F(MotorTaskTest, SpeedDec_ClampsAtMin) {
+    // Set speed to min
+    send_cmd(cmd::SET_SPEED, rsp::DEFAULT_MIN_SPEED_DUTY);
+    task.run_once();
+    drain_rsp();
+
+    send_cmd(cmd::SPEED_DEC, 0);
+    task.run_once();
+
+    RSP_MESSAGE_S rsp;
+    EXPECT_TRUE(receive_rsp(rsp));
+    EXPECT_EQ(rsp.param, rsp::DEFAULT_MIN_SPEED_DUTY);
+}
+
+TEST_F(MotorTaskTest, SetMinSpeed_RaisesCurrentSpeed) {
+    // Set speed to 150 first
+    send_cmd(cmd::SET_SPEED, 150);
+    task.run_once();
+    drain_rsp();
+
+    // Set min to 200 → current should raise to 200
+    send_cmd(cmd::SET_MIN_SPEED, 200);
+    task.run_once();
+
+    RSP_MESSAGE_S rsp;
+    EXPECT_TRUE(receive_rsp(rsp));
+    EXPECT_EQ(rsp.cmd, rsp_cmd::SPEED);
+    EXPECT_EQ(rsp.param, 200);  // response is the new min
+
+    // Motor should reflect the raised speed
+    EXPECT_EQ(motor.get_max_speed(), MotorCtrl::duty_to_pwm(200));
+}
+
+TEST_F(MotorTaskTest, SetMaxSpeed_LowersCurrentSpeed) {
+    // Set speed to 250 first, then set max to 200 → current should drop to 200
+    send_cmd(cmd::SET_SPEED, 250);
+    task.run_once();
+    drain_rsp();
+
+    send_cmd(cmd::SET_MAX_SPEED, 200);
+    task.run_once();
+
+    RSP_MESSAGE_S rsp;
+    EXPECT_TRUE(receive_rsp(rsp));
+    EXPECT_EQ(rsp.cmd, rsp_cmd::SPEED);
+    EXPECT_EQ(rsp.param, 200);
+
+    // Motor speed limit should be capped at 200
+    EXPECT_EQ(motor.get_max_speed(), MotorCtrl::duty_to_pwm(200));
+}
+
+TEST_F(MotorTaskTest, SetMaxSpeed_SavesSpeedToQueue) {
+    send_cmd(cmd::SET_MAX_SPEED, 500);
+    task.run_once();
+
+    SAVE_MESSAGE_S save;
+    EXPECT_TRUE(receive_save(save));
+    EXPECT_EQ(save.speed_valid, 1);
+    EXPECT_EQ(save.max_speed_duty, 500);
+}
+
+TEST_F(MotorTaskTest, SelfTest0x65_TriggersFullDiagHoming) {
+    send_cmd(cmd::SELF_TEST, 0);
+    task.run_once();
+
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_FAST);
+    // Complete homing
+    trigger_stall();
+    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 120; ++i) task.run_once();
+    trigger_stall();
+    encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 120; ++i) task.run_once();
+    // Full diag → chains to BACKLASH_MEASURE
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::BACKLASH_MEASURE);
+}
+
+TEST_F(MotorTaskTest, SelfTest0x65_IgnoredWhenBusy) {
+    send_cmd(cmd::SET_ZOOM, 60);
+    task.run_once();
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::MOVING);
+
+    send_cmd(cmd::SELF_TEST, 0);
+    task.run_once();
+    // Should still be MOVING, SELF_TEST ignored
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::MOVING);
+}
+
+TEST_F(MotorTaskTest, HomingComplete_RestoresUserSpeed) {
+    // Set speed to 200 (non-default)
+    send_cmd(cmd::SET_SPEED, 200);
+    task.run_once();
+    drain_rsp();
+
+    // Do homing
+    sm.transition_to(SYSTEM_STATE_E::HOMING);
+    task.start_homing(false);
+    trigger_stall();
+    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 120; ++i) task.run_once();
+    trigger_stall();
+    encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
+    iAdcCurrent = 0;
+    for (int i = 0; i < 120; ++i) task.run_once();
+    drain_rsp();
+
+    // After homing, speed should be restored to user's 200, not MAX_SPEED
+    EXPECT_EQ(motor.get_max_speed(), MotorCtrl::duty_to_pwm(200));
+}
+
+TEST_F(MotorTaskTest, RestoreSpeed_ClampsAndApplies) {
+    task.restore_speed(500, 100, 600);
+    EXPECT_EQ(motor.get_max_speed(), MotorCtrl::duty_to_pwm(500));
+
+    // Clamp: speed below min
+    task.restore_speed(50, 100, 600);
+    EXPECT_EQ(motor.get_max_speed(), MotorCtrl::duty_to_pwm(100));
+
+    // Clamp: speed above max
+    task.restore_speed(700, 100, 600);
+    EXPECT_EQ(motor.get_max_speed(), MotorCtrl::duty_to_pwm(600));
+}

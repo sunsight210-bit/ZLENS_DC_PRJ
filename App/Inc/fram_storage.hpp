@@ -33,9 +33,11 @@ struct FRAM_PARAMS_S {
     int16_t  encoder_overflow;
     uint8_t  last_save_reason;
     uint8_t  encoder_compensated;
-    uint16_t motor_speed_khz;
-    uint16_t move_count;         // zoom operations since last homing
-    uint8_t  reserved[12];
+    uint16_t speed_duty;             // was motor_speed_khz (duty_x10, 0-1000)
+    uint16_t min_speed_duty;         // min speed duty_x10
+    uint16_t max_speed_duty;         // max speed duty_x10
+    uint16_t move_count;             // zoom operations since last homing
+    uint8_t  reserved[8];
     uint16_t crc16;
 };
 #pragma pack(pop)
@@ -44,7 +46,7 @@ static_assert(sizeof(FRAM_PARAMS_S) == 60, "FRAM_PARAMS_S must be 60 bytes");
 
 class FramStorage {
 public:
-    static constexpr uint16_t MAGIC = 0x5A3C;
+    static constexpr uint16_t MAGIC = 0x5A3D;  // temp: invalidate old FRAM data
     static constexpr uint16_t PRIMARY_ADDR = 0x0000;
     static constexpr uint16_t BACKUP_ADDR  = 0x0040;
 

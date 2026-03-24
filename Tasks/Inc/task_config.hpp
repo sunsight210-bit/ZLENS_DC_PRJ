@@ -32,8 +32,13 @@ namespace cmd {
     // 0x3X: Cycle zoom
     constexpr uint8_t CYCLE_START    = 0x30;
     constexpr uint8_t CYCLE_STOP     = 0x31;
-    // 0x6X: Self-test
-    constexpr uint8_t SELF_TEST      = 0x60;
+    // 0x6X: Speed commands (CMS16 brushed DC)
+    constexpr uint8_t SET_SPEED      = 0x60;
+    constexpr uint8_t SPEED_INC      = 0x61;
+    constexpr uint8_t SPEED_DEC      = 0x62;
+    constexpr uint8_t SET_MIN_SPEED  = 0x63;
+    constexpr uint8_t SET_MAX_SPEED  = 0x64;
+    constexpr uint8_t SELF_TEST      = 0x65;
     // 0xFX: Mode switch
     constexpr uint8_t SWITCH_FACTORY = 0xFA;
 } // namespace cmd
@@ -69,7 +74,9 @@ namespace rsp {
     constexpr uint16_t ARRIVED_PARAM      = 0x000A;
     constexpr uint16_t REQ_INVALID_PARAM  = 0x000E;
     constexpr uint16_t FW_VERSION         = 0x0100;  // v1.00 (high=major, low=minor)
-    constexpr uint16_t DEFAULT_SPEED_KHZ  = 15;
+    constexpr uint16_t DEFAULT_SPEED_DUTY     = 188;  // PWM≈800 (~18.8%)
+    constexpr uint16_t DEFAULT_MIN_SPEED_DUTY = 112;  // PWM≈478 (~11.2%)
+    constexpr uint16_t DEFAULT_MAX_SPEED_DUTY = 281;  // PWM≈1198 (~28.1%)
     constexpr uint16_t POWER_DOWN         = 0x0005;
 } // namespace rsp
 
@@ -102,6 +109,11 @@ struct SAVE_MESSAGE_S {
     uint8_t backlash_valid;     // 0 = don't update, 0xFF = calibrated
     uint8_t homing_done;        // 0 = don't update, 1 = homing completed
     uint8_t position_valid;     // 0 = don't update, 0xFF = position trustworthy
+    // Speed fields (0x60 group)
+    uint16_t speed_duty;        // current speed duty_x10
+    uint16_t min_speed_duty;    // min speed duty_x10
+    uint16_t max_speed_duty;    // max speed duty_x10
+    uint8_t  speed_valid;       // 1 = update speed fields, 0 = skip
 };
 
 // Task priorities
