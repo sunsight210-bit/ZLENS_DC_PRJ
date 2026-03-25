@@ -18,10 +18,7 @@ public:
         if (m_fIntegral > INTEGRAL_MAX) m_fIntegral = INTEGRAL_MAX;
         if (m_fIntegral < -INTEGRAL_MAX) m_fIntegral = -INTEGRAL_MAX;
 
-        float fD = 0.0f;
-        if (iError != 0) {
-            fD = -KD * static_cast<float>(iPos - m_iLastPos);
-        }
+        float fD = -KD * static_cast<float>(iPos - m_iLastPos);
         m_iLastPos = iPos;
 
         float fOutput = fP + m_fIntegral + fD;

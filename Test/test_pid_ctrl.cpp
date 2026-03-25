@@ -22,7 +22,8 @@ TEST_F(PidCtrlTest, NegativeErrorGivesNegativeOutput) {
 }
 
 TEST_F(PidCtrlTest, ZeroErrorGivesZeroOutput) {
-    int16_t iOutput = m_Pid.compute(0, 100);
+    m_Pid.reset(100);
+    int16_t iOutput = m_Pid.compute(0, 100);  // D = -0.1*(100-100) = 0
     EXPECT_EQ(iOutput, 0);
 }
 
