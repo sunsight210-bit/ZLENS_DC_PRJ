@@ -96,4 +96,8 @@ namespace zlens { extern Encoder g_Encoder; }
 extern "C" void encoder_overflow_handler(int up) {
     zlens::g_Encoder.handle_overflow(up != 0);
 }
+
+extern "C" void encoder_z_pulse_handler(void) {
+    zlens::g_Encoder.handle_z_pulse();
+}
 #endif

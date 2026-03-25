@@ -52,7 +52,7 @@ IWDG_HandleTypeDef hiwdg;
 SPI_HandleTypeDef hspi2;
 
 TIM_HandleTypeDef htim3;
-TIM_HandleTypeDef htim8;
+TIM_HandleTypeDef htim4;
 
 UART_HandleTypeDef huart2;
 DMA_HandleTypeDef hdma_usart2_rx;
@@ -77,7 +77,7 @@ static void MX_DAC_Init(void);
 static void MX_IWDG_Init(void);
 static void MX_SPI2_Init(void);
 static void MX_TIM3_Init(void);
-static void MX_TIM8_Init(void);
+static void MX_TIM4_Init(void);
 static void MX_USART2_UART_Init(void);
 void StartDefaultTask(void *argument);
 
@@ -125,7 +125,7 @@ int main(void)
   MX_IWDG_Init();
   MX_SPI2_Init();
   MX_TIM3_Init();
-  MX_TIM8_Init();
+  MX_TIM4_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
   // === SWO ITM Init (only when debugger attached) ===
@@ -461,33 +461,24 @@ static void MX_TIM3_Init(void)
 }
 
 /**
-  * @brief TIM8 Initialization Function
+  * @brief TIM4 Initialization Function (AS5311 encoder on PB6/PB7)
   * @param None
   * @retval None
   */
-static void MX_TIM8_Init(void)
+static void MX_TIM4_Init(void)
 {
-
-  /* USER CODE BEGIN TIM8_Init 0 */
-
-  /* USER CODE END TIM8_Init 0 */
 
   TIM_Encoder_InitTypeDef sConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
 
-  /* USER CODE BEGIN TIM8_Init 1 */
-
-  /* USER CODE END TIM8_Init 1 */
-  htim8.Instance = TIM8;
-  htim8.Init.Prescaler = 0;
-  htim8.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim8.Init.Period = 65535;
-  htim8.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim8.Init.RepetitionCounter = 0;
-  htim8.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  htim4.Instance = TIM4;
+  htim4.Init.Prescaler = 0;
+  htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim4.Init.Period = 65535;
+  htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
-  // TODO-HW: 编码器 A/B 通道接反，软件反转 IC1 极性补偿
-  //          硬件修改后改回 TIM_ICPOLARITY_RISING 并删除此注释
+  // AS5311 A/B 信号与电机方向相反，反转 IC1 极性补偿
   sConfig.IC1Polarity = TIM_ICPOLARITY_FALLING;
   sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
   sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
@@ -496,19 +487,16 @@ static void MX_TIM8_Init(void)
   sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
   sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
   sConfig.IC2Filter = 0x0F;
-  if (HAL_TIM_Encoder_Init(&htim8, &sConfig) != HAL_OK)
+  if (HAL_TIM_Encoder_Init(&htim4, &sConfig) != HAL_OK)
   {
     Error_Handler();
   }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim8, &sMasterConfig) != HAL_OK)
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim4, &sMasterConfig) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN TIM8_Init 2 */
-
-  /* USER CODE END TIM8_Init 2 */
 
 }
 
@@ -592,17 +580,11 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : ENCODER_Z_Pin */
+  /*Configure GPIO pin : ENCODER_Z_Pin (PB8, AS5311 INDEX) */
   GPIO_InitStruct.Pin = ENCODER_Z_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(ENCODER_Z_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : LENS_ID0_Pin LENS_ID1_Pin LENS_ID2_Pin */
-  GPIO_InitStruct.Pin = LENS_ID0_Pin|LENS_ID1_Pin|LENS_ID2_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
   HAL_NVIC_SetPriority(EXTI9_5_IRQn, 5, 0);
@@ -653,15 +635,25 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     HAL_IncTick();
   }
   /* USER CODE BEGIN Callback 1 */
-  if (htim->Instance == TIM8)
+  if (htim->Instance == TIM4)
   {
     extern void encoder_overflow_handler(int up);
     // DIR bit: 0 = counting up (overflow), 1 = counting down (underflow)
-    int up = !(TIM8->CR1 & TIM_CR1_DIR);
+    int up = !(TIM4->CR1 & TIM_CR1_DIR);
     encoder_overflow_handler(up);
   }
 
   /* USER CODE END Callback 1 */
+}
+
+/* EXTI callback: AS5311 INDEX pulse (PB8) */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  if (GPIO_Pin == ENCODER_Z_Pin)
+  {
+    extern void encoder_z_pulse_handler(void);
+    encoder_z_pulse_handler();
+  }
 }
 
 /**

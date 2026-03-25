@@ -1,11 +1,7 @@
 // App/Inc/encoder.hpp
 #pragma once
 #include <cstdint>
-#ifdef BUILD_TESTING
 #include "stm32f1xx_hal.h"
-#else
-#include "stm32f1xx_hal.h"
-#endif
 
 namespace zlens {
 

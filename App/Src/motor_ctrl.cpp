@@ -29,6 +29,7 @@ void MotorCtrl::move_to(int32_t target) {
 
     int32_t pos = m_pEncoder->get_position();
     m_Pid.reset(pos);
+    m_iLastPos = pos;
 
     if (std::abs(target - pos) <= DEADZONE) {
         m_eState = MOTOR_STATE_E::IDLE;
