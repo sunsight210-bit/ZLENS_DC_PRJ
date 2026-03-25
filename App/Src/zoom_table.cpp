@@ -34,10 +34,9 @@ void ZoomTable::load_defaults() {
     std::memcpy(m_aEntries, kDefaultTable, sizeof(kDefaultTable));
 }
 
-int ZoomTable::angle_to_position(uint16_t angle_x100) const {
-    return HOME_OFFSET + static_cast<int>(
-        static_cast<int64_t>(angle_x100) * TOTAL_RANGE / FULL_ROTATION_X100
-    );
+int32_t ZoomTable::angle_to_position(int32_t iAngle_x100) const {
+    return HOME_OFFSET + static_cast<int32_t>(
+        static_cast<int64_t>(iAngle_x100) * TOTAL_RANGE / FULL_ROTATION_X100);
 }
 
 int ZoomTable::find_index(uint16_t zoom_x10) const {
