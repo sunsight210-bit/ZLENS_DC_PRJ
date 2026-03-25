@@ -10,7 +10,7 @@
 // CubeMX-generated HAL handles (defined in main.c)
 extern "C" {
     extern TIM_HandleTypeDef htim3;
-    extern TIM_HandleTypeDef htim8;
+    extern TIM_HandleTypeDef htim4;
     extern DAC_HandleTypeDef hdac;
     extern ADC_HandleTypeDef hadc1;
     extern SPI_HandleTypeDef hspi2;
@@ -51,7 +51,7 @@ extern "C" void app_init(void) {
 
     // Init App modules
     g_Motor.init(&htim3, &hdac, &g_Encoder);
-    g_Motor.set_soft_limit_min(ZoomTable::HOME_OFFSET);  // don't overshoot below soft limit
+    g_Motor.set_soft_limit_min(ZoomTable::HOME_OFFSET);  // 128
     HAL_DAC_Start(&hdac, DAC_CHANNEL_2);   // enable DAC CH2 output
     g_Motor.set_vref_mv(2000);  // A4950 VREF=2.0V
     g_Encoder.init();
@@ -76,11 +76,11 @@ extern "C" void app_init(void) {
     HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
     HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
 
-    // Start TIM8 encoder + enable overflow interrupt for 32-bit position
-    HAL_TIM_Encoder_Start(&htim8, TIM_CHANNEL_ALL);
-    __HAL_TIM_ENABLE_IT(&htim8, TIM_IT_UPDATE);
-    HAL_NVIC_SetPriority(TIM8_UP_IRQn, 5, 0);
-    HAL_NVIC_EnableIRQ(TIM8_UP_IRQn);
+    // Start TIM4 encoder (AS5311) + enable overflow interrupt for 32-bit position
+    HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
+    __HAL_TIM_ENABLE_IT(&htim4, TIM_IT_UPDATE);
+    HAL_NVIC_SetPriority(TIM4_IRQn, 5, 0);
+    HAL_NVIC_EnableIRQ(TIM4_IRQn);
 
     // Create FreeRTOS tasks
     TaskHandle_t hMotorTask = nullptr;
