@@ -6,9 +6,9 @@ namespace zlens {
 
 class PidCtrl {
 public:
-    static constexpr float KP = 0.50f;
+    static constexpr float KP = 0.70f;
     static constexpr float KI = 0.00f;
-    static constexpr float KD = 0.10f;
+    static constexpr float KD = 0.00f;
     static constexpr float INTEGRAL_MAX = 500.0f;
 
     int16_t compute(int32_t iError, int32_t iPos) {

@@ -19,12 +19,11 @@ class MotorCtrl {
 public:
     static constexpr uint16_t PWM_ARR = 4266;
     static constexpr uint16_t MAX_SPEED = 1200;
-    static constexpr uint16_t MIN_SPEED = 480;
-    static constexpr int32_t  DEADZONE = 25;           // ~50um
+    static constexpr uint16_t MIN_SPEED = 200;
+    static constexpr int32_t  DEADZONE = 3;            // ~6um
     static constexpr int32_t  SAFE_LIMIT_MIN = 64;     // = HOME_OFFSET / 2
     static constexpr uint16_t ENCODER_TIMEOUT_TICKS = 500;  // 500ms
-    static constexpr int32_t  COAST_ZONE = 100;        // ~0.2mm
-    static constexpr uint16_t COAST_TIMEOUT = 50;      // 50 ticks = 50ms
+    static constexpr uint16_t SETTLE_COUNT = 100;      // 100ms brake settle before IDLE
 
     void init(TIM_HandleTypeDef* htim, DAC_HandleTypeDef* hdac, Encoder* encoder);
     void move_to(int32_t target);
@@ -63,8 +62,9 @@ private:
 
     PidCtrl m_Pid;
     int32_t m_iLastPos = 0;
+    int32_t m_iLastPosBeforeUpdate = 0;
     uint16_t m_iNoMoveCount = 0;
-    uint16_t m_iCoastCount = 0;
+    uint16_t m_iSettleCount = 0;
 
     void set_pwm(DIRECTION_E dir, uint16_t speed);
     void brake();

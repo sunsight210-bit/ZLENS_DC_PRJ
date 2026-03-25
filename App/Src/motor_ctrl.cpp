@@ -15,7 +15,6 @@ void MotorCtrl::init(TIM_HandleTypeDef* htim, DAC_HandleTypeDef* hdac, Encoder* 
     m_eState = MOTOR_STATE_E::IDLE;
     m_iTarget = 0;
     m_iNoMoveCount = 0;
-    m_iCoastCount = 0;
     m_Pid.reset(0);
     coast();
 }
@@ -25,7 +24,7 @@ void MotorCtrl::move_to(int32_t target) {
     if (target > m_iSafeLimitMax) target = m_iSafeLimitMax;
 
     m_iNoMoveCount = 0;
-    m_iCoastCount = 0;
+    m_iSettleCount = 0;
 
     int32_t pos = m_pEncoder->get_position();
     m_Pid.reset(pos);
@@ -50,7 +49,6 @@ void MotorCtrl::emergency_stop() {
     brake();
     m_Pid.reset(0);
     m_iNoMoveCount = 0;
-    m_iCoastCount = 0;
     m_eState = MOTOR_STATE_E::IDLE;
 }
 
@@ -58,6 +56,7 @@ void MotorCtrl::update() {
     if (m_eState != MOTOR_STATE_E::RUNNING) return;
 
     int32_t pos = m_pEncoder->get_position();
+    m_iLastPosBeforeUpdate = m_iLastPos;  // snapshot for settle detection
     int32_t iError = m_iTarget - pos;
 
     // Safety limits
@@ -79,28 +78,32 @@ void MotorCtrl::update() {
     }
     m_iLastPos = pos;
 
-    // Deadzone check
+    // Deadzone check: brake and wait for settle before going IDLE
+    // Motor may coast/rebound after brake, so require SETTLE_COUNT
+    // consecutive ticks within DEADZONE with no position change
     if (std::abs(iError) <= DEADZONE) {
-        brake(); m_Pid.reset(pos); m_eState = MOTOR_STATE_E::IDLE; return;
+        brake();
+        if (pos == m_iLastPosBeforeUpdate) {
+            // Position unchanged this tick
+            if (++m_iSettleCount >= SETTLE_COUNT) {
+                m_Pid.reset(pos);
+                m_iSettleCount = 0;
+                m_eState = MOTOR_STATE_E::IDLE;
+            }
+        } else {
+            m_iSettleCount = 0;  // still moving, reset settle counter
+        }
+        return;
     }
+    m_iSettleCount = 0;
 
     // PID compute
     int16_t iOutput = m_Pid.compute(iError, pos);
     uint16_t iSpeed = static_cast<uint16_t>(std::abs(iOutput));
 
-    // Coast zone with timeout nudge
+    // Pure PID: clamp to MIN_SPEED to overcome friction, no coast/nudge
     if (iSpeed < MIN_SPEED) {
-        if (std::abs(iError) <= COAST_ZONE) {
-            if (++m_iCoastCount < COAST_TIMEOUT) {
-                coast();
-                m_iNoMoveCount = 0;
-                return;
-            }
-            m_iCoastCount = 0;
-        }
         iSpeed = MIN_SPEED;
-    } else {
-        m_iCoastCount = 0;
     }
 
     m_eDirection = (iOutput >= 0) ? DIRECTION_E::FORWARD : DIRECTION_E::REVERSE;
