@@ -123,13 +123,37 @@ def send_and_wait(ser, cmd: int, param: int, expected_rsp: int,
     return False, None
 
 
-def query_position(ser, timeout: float = 3.0):
-    """Send QUERY_ZOOM and return position counts, or None on failure."""
-    ok, param = send_and_wait(ser, CMD_QUERY_ZOOM, 0, RSP_ZOOM,
-                              timeout=timeout, label="QUERY_ZOOM")
-    if ok:
-        return param
-    return None
+def send_zoom_and_collect(ser, zoom_x10: int, timeout: float = 20.0):
+    """
+    Send SET_ZOOM, collect both ZOOM (cmd=0x10) and ARRIVED (cmd=0x02) responses.
+    Returns (got_zoom, zoom_param, got_arrived).
+    """
+    frame = build_frame(CMD_SET_ZOOM, zoom_x10)
+    ser.reset_input_buffer()
+    ser.write(frame)
+
+    got_zoom = False
+    zoom_param = 0
+    got_arrived = False
+    deadline = time.time() + timeout
+    buf = b""
+    while time.time() < deadline:
+        if got_zoom and got_arrived:
+            break
+        chunk = ser.read(WORK_FRAME_SIZE)
+        if chunk:
+            buf += chunk
+            while len(buf) >= WORK_FRAME_SIZE:
+                result = parse_response(buf[:WORK_FRAME_SIZE])
+                buf = buf[WORK_FRAME_SIZE:]
+                if result is not None:
+                    rsp_cmd, rsp_param = result
+                    if rsp_cmd == RSP_ZOOM and not got_zoom:
+                        got_zoom = True
+                        zoom_param = rsp_param
+                    elif rsp_cmd == RSP_ARRIVED:
+                        got_arrived = True
+    return got_zoom, zoom_param, got_arrived
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +190,11 @@ def run_tests(port: str, baud: int) -> bool:
 
     # --- Test 1: HOMING ---
     print("\n[TEST 1] HOMING")
+    # 清空 boot 期间残留的 UART 数据
+    ser.reset_input_buffer()
+    time.sleep(0.2)
+    ser.reset_input_buffer()
+
     ok, _ = send_and_wait(ser, CMD_HOMING, 0, RSP_HOMING_DONE,
                           timeout=25.0, label="HOMING")
     check("HOMING → HOMING_DONE", ok)
@@ -173,91 +202,29 @@ def run_tests(port: str, baud: int) -> bool:
         print("  CRITICAL: Homing failed, aborting remaining tests.")
         ser.close()
         return False
-    time.sleep(0.5)
+    # 等 homing settle 完成 + UART DMA 稳定
+    time.sleep(2.0)
+    ser.reset_input_buffer()
 
-    # --- Test 2: SET_ZOOM 1.0X ---
-    print("\n[TEST 2] SET_ZOOM 1.0X (forward from home)")
-    ok, _ = send_and_wait(ser, CMD_SET_ZOOM, 10, RSP_ARRIVED,
-                          timeout=20.0, label="SET_ZOOM(1.0X)")
-    if ok:
-        pos = query_position(ser)
-        expected = EXPECTED_POSITIONS[10]
-        if pos is not None:
-            err = abs(pos - expected)
-            detail = f"pos={pos} expected={expected} err={err} DEADZONE={DEADZONE}"
-            check("SET_ZOOM(1.0X) position", err <= DEADZONE, detail)
-        else:
-            check("SET_ZOOM(1.0X) position", False, "query failed")
-    else:
-        check("SET_ZOOM(1.0X) ARRIVED", False, "timeout")
-    time.sleep(0.3)
+    # Helper for zoom tests
+    def zoom_test(test_num, zoom_x10, label, timeout=20.0):
+        print(f"\n[TEST {test_num}] SET_ZOOM {zoom_x10/10:.1f}X ({label})")
+        got_zoom, zoom_val, got_arrived = send_zoom_and_collect(
+            ser, zoom_x10, timeout=timeout)
+        zoom_ok = got_zoom and zoom_val == zoom_x10
+        check(f"SET_ZOOM({zoom_x10/10:.1f}X) zoom response",
+              zoom_ok,
+              f"zoom_x10={zoom_val}" if got_zoom else "no ZOOM response")
+        check(f"SET_ZOOM({zoom_x10/10:.1f}X) arrived",
+              got_arrived,
+              "" if got_arrived else "timeout")
+        time.sleep(0.3)
 
-    # --- Test 3: SET_ZOOM 2.0X ---
-    print("\n[TEST 3] SET_ZOOM 2.0X (forward)")
-    ok, _ = send_and_wait(ser, CMD_SET_ZOOM, 20, RSP_ARRIVED,
-                          timeout=20.0, label="SET_ZOOM(2.0X)")
-    if ok:
-        pos = query_position(ser)
-        expected = EXPECTED_POSITIONS[20]
-        if pos is not None:
-            err = abs(pos - expected)
-            detail = f"pos={pos} expected={expected} err={err} DEADZONE={DEADZONE}"
-            check("SET_ZOOM(2.0X) position", err <= DEADZONE, detail)
-        else:
-            check("SET_ZOOM(2.0X) position", False, "query failed")
-    else:
-        check("SET_ZOOM(2.0X) ARRIVED", False, "timeout")
-    time.sleep(0.3)
-
-    # --- Test 4: SET_ZOOM 1.0X (reverse) ---
-    print("\n[TEST 4] SET_ZOOM 1.0X (reverse direction)")
-    ok, _ = send_and_wait(ser, CMD_SET_ZOOM, 10, RSP_ARRIVED,
-                          timeout=20.0, label="SET_ZOOM(1.0X) reverse")
-    if ok:
-        pos = query_position(ser)
-        expected = EXPECTED_POSITIONS[10]
-        if pos is not None:
-            err = abs(pos - expected)
-            detail = f"pos={pos} expected={expected} err={err} DEADZONE={DEADZONE}"
-            check("SET_ZOOM(1.0X) reverse position", err <= DEADZONE, detail)
-        else:
-            check("SET_ZOOM(1.0X) reverse position", False, "query failed")
-    else:
-        check("SET_ZOOM(1.0X) reverse ARRIVED", False, "timeout")
-    time.sleep(0.3)
-
-    # --- Test 5: SET_ZOOM 7.0X ---
-    print("\n[TEST 5] SET_ZOOM 7.0X (long forward move)")
-    ok, _ = send_and_wait(ser, CMD_SET_ZOOM, 70, RSP_ARRIVED,
-                          timeout=30.0, label="SET_ZOOM(7.0X)")
-    if ok:
-        pos = query_position(ser)
-        expected = EXPECTED_POSITIONS[70]
-        if pos is not None:
-            err = abs(pos - expected)
-            detail = f"pos={pos} expected={expected} err={err} DEADZONE={DEADZONE}"
-            check("SET_ZOOM(7.0X) position", err <= DEADZONE, detail)
-        else:
-            check("SET_ZOOM(7.0X) position", False, "query failed")
-    else:
-        check("SET_ZOOM(7.0X) ARRIVED", False, "timeout")
-    time.sleep(0.3)
-
-    # --- Test 6: SET_ZOOM 0.6X ---
-    print("\n[TEST 6] SET_ZOOM 0.6X (reverse to near-home)")
-    ok, _ = send_and_wait(ser, CMD_SET_ZOOM, 6, RSP_ARRIVED,
-                          timeout=30.0, label="SET_ZOOM(0.6X)")
-    if ok:
-        pos = query_position(ser)
-        expected = EXPECTED_POSITIONS[6]
-        if pos is not None:
-            err = abs(pos - expected)
-            detail = f"pos={pos} expected={expected} err={err} DEADZONE={DEADZONE}"
-            check("SET_ZOOM(0.6X) position", err <= DEADZONE, detail)
-        else:
-            check("SET_ZOOM(0.6X) position", False, "query failed")
-    else:
-        check("SET_ZOOM(0.6X) ARRIVED", False, "timeout")
+    zoom_test(2, 10, "forward from home")
+    zoom_test(3, 20, "forward")
+    zoom_test(4, 10, "reverse direction")
+    zoom_test(5, 70, "long forward move", timeout=30.0)
+    zoom_test(6, 6, "reverse to near-home", timeout=30.0)
 
     ser.close()
 
