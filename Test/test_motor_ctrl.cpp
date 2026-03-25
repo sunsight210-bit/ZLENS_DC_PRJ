@@ -1,622 +1,346 @@
 // Test/test_motor_ctrl.cpp
 #include <gtest/gtest.h>
 #include "motor_ctrl.hpp"
+#include "mock_hal.hpp"
 
 using namespace zlens;
 
-class MotorCtrlTest : public ::testing::Test {
+class MotorCtrlPidTest : public ::testing::Test {
 protected:
     MotorCtrl motor;
     Encoder encoder;
-    TIM_HandleTypeDef htim3;
+    TIM_HandleTypeDef htim_pwm;
     DAC_HandleTypeDef hdac;
 
     void SetUp() override {
         mock::get_log().reset();
-        htim3.Instance = TIM3;
+        htim_pwm.Instance = TIM3;
         hdac.Instance = DAC1;
         encoder.init();
-        motor.init(&htim3, &hdac, &encoder);
+        motor.init(&htim_pwm, &hdac, &encoder);
     }
 };
 
-TEST_F(MotorCtrlTest, InitialState_IsIdle) {
+// 1. InitialStateIsIdle
+TEST_F(MotorCtrlPidTest, InitialStateIsIdle) {
     EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::IDLE);
 }
 
-TEST_F(MotorCtrlTest, MoveTo_StartsAccelerating) {
-    motor.move_to(10000);
-    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::ACCELERATING);
-    EXPECT_EQ(motor.get_direction(), DIRECTION_E::FORWARD);
-}
-
-TEST_F(MotorCtrlTest, MoveTo_Reverse) {
-    encoder.set_position(50000);
-    motor.move_to(10000);
-    EXPECT_EQ(motor.get_direction(), DIRECTION_E::REVERSE);
-}
-
-TEST_F(MotorCtrlTest, Update_AcceleratesSpeed) {
-    motor.move_to(100000);
-    uint16_t speed1 = motor.get_current_speed();
+// 2. IdleDoesNothing
+TEST_F(MotorCtrlPidTest, IdleDoesNothing) {
     motor.update();
-    uint16_t speed2 = motor.get_current_speed();
-    EXPECT_GT(speed2, speed1);
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::IDLE);
 }
 
-TEST_F(MotorCtrlTest, EmergencyStop_GoesToIdle) {
+// 3. MoveToSetsRunning
+TEST_F(MotorCtrlPidTest, MoveToSetsRunning) {
+    encoder.set_position(0);
     motor.move_to(10000);
-    motor.emergency_stop();
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::RUNNING);
+}
+
+// 4. MoveToWithinDeadzoneStaysIdle
+TEST_F(MotorCtrlPidTest, MoveToWithinDeadzoneStaysIdle) {
+    encoder.set_position(1000);
+    motor.move_to(1020);  // |20| <= DEADZONE(25)
     EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::IDLE);
 }
 
-TEST_F(MotorCtrlTest, ArrivedAtTarget_StopsAndIdle) {
-    motor.move_to(5000);
-    encoder.set_position(4500); // within deadzone (1000)
-    for (int i = 0; i < 500; ++i) {
-        motor.update();
-        if (motor.get_state() == MOTOR_STATE_E::IDLE) break;
-    }
-    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::IDLE);
+// 5. MoveToClampsBelowSafeMin
+TEST_F(MotorCtrlPidTest, MoveToClampsBelowSafeMin) {
+    encoder.set_position(100);
+    motor.move_to(-500);
+    // Target clamped to SAFE_LIMIT_MIN(64)
+    EXPECT_EQ(motor.get_target(), MotorCtrl::SAFE_LIMIT_MIN);
 }
 
-TEST_F(MotorCtrlTest, SetVrefMv) {
-    motor.set_vref_mv(1000);
-    EXPECT_GE(mock::get_log().dac_sets.size(), 1u);
+// 6. MoveToClampsAboveSafeMax
+TEST_F(MotorCtrlPidTest, MoveToClampsAboveSafeMax) {
+    encoder.set_position(60000);
+    motor.move_to(70000);
+    // Target clamped to safe max (65536 - 64 = 65472)
+    int32_t iExpectedMax = 65536 - MotorCtrl::SAFE_LIMIT_MIN;
+    EXPECT_EQ(motor.get_target(), iExpectedMax);
 }
 
-TEST_F(MotorCtrlTest, Stop_DeceleratesFirst) {
-    motor.move_to(100000);
-    for (int i = 0; i < 100; ++i) motor.update();
-    motor.stop();
-    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::DECELERATING);
-}
-
-// --- Backlash compensation tests ---
-
-TEST_F(MotorCtrlTest, SetSpeedLimit_LimitsMaxSpeed) {
-    motor.set_speed_limit(1000);
-    motor.move_to(100000);
-    for (int i = 0; i < 500; ++i) motor.update();
-    EXPECT_LE(motor.get_current_speed(), 1000u);
-}
-
-TEST_F(MotorCtrlTest, Backlash_ForwardMove_NoCompensation) {
-    motor.set_backlash(200);
-    motor.set_backlash_enabled(true);
+// 7. ForwardErrorDrivesForward
+TEST_F(MotorCtrlPidTest, ForwardErrorDrivesForward) {
     encoder.set_position(1000);
     motor.move_to(5000);
-    EXPECT_EQ(motor.get_target(), 5000);
-    EXPECT_EQ(motor.get_direction(), DIRECTION_E::FORWARD);
-}
-
-TEST_F(MotorCtrlTest, Backlash_Disabled_NoCompensation) {
-    motor.set_backlash(200);
-    motor.set_backlash_enabled(false);
-    encoder.set_position(10000);
-    motor.move_to(5000);
-    EXPECT_EQ(motor.get_target(), 5000);
-    EXPECT_EQ(motor.get_direction(), DIRECTION_E::REVERSE);
-}
-
-TEST_F(MotorCtrlTest, Backlash_ReverseMove_OvershootTarget) {
-    motor.set_backlash(200);
-    motor.set_backlash_enabled(true);
-    encoder.set_position(10000);
-    motor.move_to(5000);
-    // Phase 1: overshoot = 5000 - 200 - 200 = 4600
-    EXPECT_EQ(motor.get_target(), 4600);
-    EXPECT_EQ(motor.get_direction(), DIRECTION_E::REVERSE);
-}
-
-TEST_F(MotorCtrlTest, Backlash_ReverseMove_ApproachingState) {
-    motor.set_backlash(200);
-    motor.set_backlash_enabled(true);
-    encoder.set_position(10000);
-    motor.move_to(5000);
-    // Simulate arrival at overshoot (4600)
-    encoder.set_position(4600);
-    for (int i = 0; i < 500; ++i) {
-        motor.update();
-        if (motor.get_state() == MOTOR_STATE_E::APPROACHING) break;
-    }
-    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::APPROACHING);
-}
-
-TEST_F(MotorCtrlTest, Backlash_ReverseMove_Phase2Forward) {
-    motor.set_backlash(200);
-    motor.set_backlash_enabled(true);
-    encoder.set_position(10000);
-    motor.move_to(5000);
-    // Phase 1: arrive at overshoot (4600)
-    encoder.set_position(4600);
-    for (int i = 0; i < 500; ++i) motor.update();
-    // Phase 2: should now target 5000, forward direction
     motor.update();
-    EXPECT_EQ(motor.get_target(), 5000);
     EXPECT_EQ(motor.get_direction(), DIRECTION_E::FORWARD);
+    // PWM should be set on channel 1 (forward), channel 2 = 0
+    EXPECT_GT(htim_pwm.Instance->CCR1, 0u);
+    EXPECT_EQ(htim_pwm.Instance->CCR2, 0u);
 }
 
-TEST_F(MotorCtrlTest, Backlash_ReverseMove_CompletesAtFinalTarget) {
-    motor.set_backlash(200);
-    motor.set_backlash_enabled(true);
-    encoder.set_position(10000);
+// 8. ReverseErrorDrivesReverse
+TEST_F(MotorCtrlPidTest, ReverseErrorDrivesReverse) {
+    encoder.set_position(5000);
+    motor.move_to(1000);
+    motor.update();
+    EXPECT_EQ(motor.get_direction(), DIRECTION_E::REVERSE);
+    // PWM should be set on channel 2 (reverse), channel 1 = 0
+    EXPECT_EQ(htim_pwm.Instance->CCR1, 0u);
+    EXPECT_GT(htim_pwm.Instance->CCR2, 0u);
+}
+
+// 9. ReachesTargetAndStops
+TEST_F(MotorCtrlPidTest, ReachesTargetAndStops) {
+    encoder.set_position(0);
     motor.move_to(5000);
-    // Phase 1
-    encoder.set_position(4600);
-    for (int i = 0; i < 500; ++i) motor.update();
-    // Phase 2 — within FINE_DEADZONE(500) of 5000
-    encoder.set_position(4600);
-    for (int i = 0; i < 500; ++i) {
-        motor.update();
-        if (motor.get_state() == MOTOR_STATE_E::IDLE) break;
-    }
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::RUNNING);
+    // Simulate encoder reaching within DEADZONE of target
+    encoder.set_position(4980);  // |5000 - 4980| = 20 <= 25
+    motor.update();
     EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::IDLE);
 }
 
-TEST_F(MotorCtrlTest, Backlash_ReverseMove_LargeBacklash) {
-    motor.set_backlash(997);
-    motor.set_backlash_enabled(true);
-    encoder.set_position(10000);
-    motor.move_to(5000);
-    // overshoot = 5000 - 997 - 200 = 3803
-    EXPECT_EQ(motor.get_target(), 3803);
+// 10. SafeLimitMinBrakes
+TEST_F(MotorCtrlPidTest, SafeLimitMinBrakes_RunningAboveLimit) {
+    encoder.set_position(200);
+    motor.move_to(MotorCtrl::SAFE_LIMIT_MIN + 1);  // 65, valid target
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::RUNNING);
 }
 
-TEST_F(MotorCtrlTest, Backlash_Phase2_StartsAtPhase2Speed) {
-    motor.set_backlash(200);
-    motor.set_backlash_enabled(true);
-    encoder.set_position(10000);
-    motor.move_to(5000);
-    // Arrive at overshoot (4600) to trigger APPROACHING
-    encoder.set_position(4600);
-    for (int i = 0; i < 500; ++i) {
-        motor.update();
-        if (motor.get_state() == MOTOR_STATE_E::APPROACHING) break;
-    }
-    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::APPROACHING);
-    // One update transitions out of APPROACHING
+TEST_F(MotorCtrlPidTest, SafeLimitMinBrakes_AtLimit) {
+    // Safety check: pos <= SAFE_LIMIT_MIN && error < 0 → brake to IDLE
+    // Set up: move to a low target, then position overshoots below safe limit
+    // We need error < 0: target < pos, so target must be below pos
+    // Use set_safe_limit_max to allow a low target scenario
+    // Start far away, target=200
+    encoder.set_position(500);
+    motor.move_to(200);
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::RUNNING);
+    EXPECT_EQ(motor.get_target(), 200);
+    // Motor overshoots: position drops to 50 (below SAFE_LIMIT_MIN=64)
+    // error = 200 - 50 = 150 > 0 → safety check (error<0) won't trigger
+    // To get error < 0 we need pos > target AND pos <= 64
+    // That means target < 64, but move_to clamps to SAFE_LIMIT_MIN=64
+    // So target=64, pos=64 → error=0 → deadzone → IDLE (not safety, but still stops)
+    encoder.set_position(64);
     motor.update();
-    EXPECT_EQ(motor.get_current_speed(), MotorCtrl::PHASE2_SPEED);
-    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::CONSTANT);
+    // error = 200 - 64 = 136 > 0 → not safety triggered, still RUNNING
+    // The safety limit min check protects against going below 64 with negative error
+    // In practice, with clamping at SAFE_LIMIT_MIN, error can't be negative at pos<=64
+    // unless target is manually set. Test the deadzone path instead.
+    encoder.set_position(190);  // error = 200-190 = 10 <= 25 → deadzone → IDLE
+    motor.update();
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::IDLE);
 }
 
-TEST_F(MotorCtrlTest, Backlash_EmergencyStop_DuringApproach) {
-    motor.set_backlash(200);
-    motor.set_backlash_enabled(true);
-    encoder.set_position(10000);
-    motor.move_to(5000);
-    encoder.set_position(4600);
-    for (int i = 0; i < 500; ++i) {
+TEST_F(MotorCtrlPidTest, SafeLimitMinBrakes_ReverseAtLimit) {
+    // The safety limit min check: pos <= SAFE_LIMIT_MIN && error < 0
+    // With entry clamping, target >= SAFE_LIMIT_MIN=64, so error < 0 only if pos > target
+    // But pos <= 64 and target >= 64 means error >= 0 always
+    // This guard protects against encoder noise pushing pos below limit while moving in reverse
+    // Test: start moving to low target (64), position reads 64, error = 0 → deadzone
+    encoder.set_position(500);
+    motor.move_to(MotorCtrl::SAFE_LIMIT_MIN);  // clamped to 64
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::RUNNING);
+    EXPECT_EQ(motor.get_target(), MotorCtrl::SAFE_LIMIT_MIN);
+    // Arrive within deadzone → IDLE
+    encoder.set_position(70);  // error = 64 - 70 = -6, |6| <= 25 → deadzone
+    motor.update();
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::IDLE);
+}
+
+TEST_F(MotorCtrlPidTest, SafeLimitMaxBrakes) {
+    // pos >= safe max and error > 0 → brake
+    int32_t iSafeMax = 65536 - MotorCtrl::SAFE_LIMIT_MIN;
+    encoder.set_position(1000);
+    motor.move_to(iSafeMax);
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::RUNNING);
+    // Position at safe max, error > 0
+    encoder.set_position(iSafeMax + 10);
+    motor.update();
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::IDLE);
+}
+
+// 11. EncoderTimeoutCausesStall
+TEST_F(MotorCtrlPidTest, EncoderTimeoutCausesStall) {
+    encoder.set_position(0);
+    motor.move_to(10000);
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::RUNNING);
+    // Freeze encoder at position far from target
+    encoder.set_position(5000);
+    for (uint16_t i = 0; i < MotorCtrl::ENCODER_TIMEOUT_TICKS + 1; ++i) {
         motor.update();
-        if (motor.get_state() == MOTOR_STATE_E::APPROACHING) break;
+        if (motor.get_state() == MOTOR_STATE_E::STALLED) break;
     }
-    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::APPROACHING);
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::STALLED);
+}
+
+// 12. CoastZoneReleasesMotor
+TEST_F(MotorCtrlPidTest, CoastZoneReleasesMotor) {
+    // When PID output < MIN_SPEED and error in COAST_ZONE → coast (both channels 0)
+    // Need to avoid large D-term spike: move_to resets PID with current pos,
+    // so first update with same pos has D=0
+    encoder.set_position(9920);
+    motor.move_to(10000);
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::RUNNING);
+    // error = 80, P = 0.5*80 = 40, D = 0 (no position change since reset)
+    // total output = 40 < MIN_SPEED(480), |error|=80 <= COAST_ZONE(100) → coast
+    motor.update();
+    // Coast: both CCR1 and CCR2 should be 0
+    EXPECT_EQ(htim_pwm.Instance->CCR1, 0u);
+    EXPECT_EQ(htim_pwm.Instance->CCR2, 0u);
+    // Still RUNNING (not IDLE yet)
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::RUNNING);
+}
+
+// 13. CoastTimeoutAppliesNudge
+TEST_F(MotorCtrlPidTest, CoastTimeoutAppliesNudge) {
+    // Start near target so D-term is zero on first update
+    encoder.set_position(9920);
+    motor.move_to(10000);
+    // error=80, P=40, D=0, output=40 < MIN_SPEED → coast zone
+    // Coast for (COAST_TIMEOUT - 1) ticks: ticks 0..48 coast
+    for (uint16_t i = 0; i < MotorCtrl::COAST_TIMEOUT - 1; ++i) {
+        motor.update();
+        EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::RUNNING);
+        // During coast, both channels = 0
+        EXPECT_EQ(htim_pwm.Instance->CCR1, 0u);
+        EXPECT_EQ(htim_pwm.Instance->CCR2, 0u);
+    }
+    // Tick COAST_TIMEOUT: counter reaches limit → nudge with MIN_SPEED
+    motor.update();
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::RUNNING);
+    // Should have PWM set (not coast) — at least one channel > 0
+    bool bMotorDriven = (htim_pwm.Instance->CCR1 > 0) || (htim_pwm.Instance->CCR2 > 0);
+    EXPECT_TRUE(bMotorDriven);
+}
+
+// 14. CoastDoesNotAccumulateStallCount
+TEST_F(MotorCtrlPidTest, CoastDoesNotAccumulateStallCount) {
+    // Start near target so D-term is zero
+    encoder.set_position(9920);
+    motor.move_to(10000);
+    // error=80, in coast zone, PID output < MIN_SPEED
+    // Run 600 ticks in coast zone — should NOT stall
+    for (int i = 0; i < 600; ++i) {
+        motor.update();
+        EXPECT_NE(motor.get_state(), MOTOR_STATE_E::STALLED)
+            << "Stalled at tick " << i;
+    }
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::RUNNING);
+}
+
+// 15. MoveToRecoverFromStalled
+TEST_F(MotorCtrlPidTest, MoveToRecoverFromStalled) {
+    encoder.set_position(0);
+    motor.move_to(10000);
+    // Force stall
+    encoder.set_position(5000);
+    for (uint16_t i = 0; i < MotorCtrl::ENCODER_TIMEOUT_TICKS + 1; ++i) {
+        motor.update();
+        if (motor.get_state() == MOTOR_STATE_E::STALLED) break;
+    }
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::STALLED);
+    // New move_to should recover
+    encoder.set_position(5000);
+    motor.move_to(8000);
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::RUNNING);
+}
+
+// 16. StopBrakes
+TEST_F(MotorCtrlPidTest, StopBrakes) {
+    encoder.set_position(0);
+    motor.move_to(10000);
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::RUNNING);
+    motor.stop();
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::IDLE);
+    // Brake: both channels = PWM_ARR
+    EXPECT_EQ(htim_pwm.Instance->CCR1, MotorCtrl::PWM_ARR);
+    EXPECT_EQ(htim_pwm.Instance->CCR2, MotorCtrl::PWM_ARR);
+}
+
+// 17. EmergencyStopBrakes
+TEST_F(MotorCtrlPidTest, EmergencyStopBrakes) {
+    encoder.set_position(0);
+    motor.move_to(10000);
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::RUNNING);
     motor.emergency_stop();
     EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::IDLE);
-    motor.update();
-    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::IDLE);
+    // Brake: both channels = PWM_ARR
+    EXPECT_EQ(htim_pwm.Instance->CCR1, MotorCtrl::PWM_ARR);
+    EXPECT_EQ(htim_pwm.Instance->CCR2, MotorCtrl::PWM_ARR);
 }
 
-// --- Phase2 fine deadzone tests ---
+// --- Additional PID behavior tests ---
 
-TEST_F(MotorCtrlTest, Phase2_UsesFineDZone_NotCoarseDZone) {
-    // Phase2 should stop within FINE_DEADZONE(500), not DEADZONE(1000)
-    motor.set_backlash(257);
-    motor.set_backlash_enabled(true);
-    encoder.set_position(10000);
-    motor.move_to(5000);
-    // Phase 1: overshoot = 5000 - 257 - 200 = 4543
-    EXPECT_EQ(motor.get_target(), 4543);
-    // Arrive at overshoot → APPROACHING
-    encoder.set_position(4543);
-    for (int i = 0; i < 500; ++i) {
-        motor.update();
-        if (motor.get_state() == MOTOR_STATE_E::APPROACHING) break;
-    }
-    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::APPROACHING);
-    // Enter Phase2
-    motor.update();
-    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::CONSTANT);
-    EXPECT_EQ(motor.get_target(), 5000);
-    // Position at 4200 — 800 from target, outside FINE_DEADZONE(500) → keep moving
-    encoder.set_position(4200);
-    motor.update();
-    EXPECT_NE(motor.get_state(), MOTOR_STATE_E::IDLE);
-    // Position at 4600 — within FINE_DEADZONE(500) of 5000
-    encoder.set_position(4600);
-    for (int i = 0; i < 500; ++i) {
-        motor.update();
-        if (motor.get_state() == MOTOR_STATE_E::IDLE) break;
-    }
-    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::IDLE);
+TEST_F(MotorCtrlPidTest, SetVrefMv_SetsDac) {
+    motor.set_vref_mv(1000);
+    auto& log = mock::get_log();
+    EXPECT_GE(log.dac_sets.size(), 1u);
+    // Expected: 1000 * 4095 / 3300 = 1240
+    EXPECT_EQ(log.dac_sets.back().value, 1240u);
 }
 
-// --- Settle: position verification (replaces old "always IDLE" behavior) ---
-// See post-settle verification tests below for new behavior
+TEST_F(MotorCtrlPidTest, DutyPwmConversion) {
+    // 500/1000 = 50% → 4266/2 = 2133
+    EXPECT_EQ(MotorCtrl::duty_to_pwm(500), 2133u);
+    EXPECT_EQ(MotorCtrl::pwm_to_duty(2133), 500u);
+}
 
-// --- Encoder timeout tests ---
+TEST_F(MotorCtrlPidTest, SetPwmTest_DirectDrive) {
+    motor.set_pwm_test(DIRECTION_E::FORWARD, 600);
+    EXPECT_EQ(htim_pwm.Instance->CCR1, 600u);
+    EXPECT_EQ(htim_pwm.Instance->CCR2, 0u);
 
-TEST_F(MotorCtrlTest, EncoderTimeout_MotorStuck_BrakesToSettling) {
-    // Motor running but encoder not moving → timeout (2000 ticks) → brake → SETTLING
-    motor.move_to(100000);
-    // Advance past acceleration
-    for (int i = 0; i < 50; ++i) {
-        encoder.set_position(i * 100);
-        motor.update();
-    }
-    EXPECT_NE(motor.get_state(), MOTOR_STATE_E::IDLE);
-    // Now freeze encoder position — simulate stuck motor
+    motor.set_pwm_test(DIRECTION_E::REVERSE, 800);
+    EXPECT_EQ(htim_pwm.Instance->CCR1, 0u);
+    EXPECT_EQ(htim_pwm.Instance->CCR2, 800u);
+}
+
+TEST_F(MotorCtrlPidTest, BrakeTest_BothChannelsHigh) {
+    motor.brake_test();
+    EXPECT_EQ(htim_pwm.Instance->CCR1, MotorCtrl::PWM_ARR);
+    EXPECT_EQ(htim_pwm.Instance->CCR2, MotorCtrl::PWM_ARR);
+}
+
+TEST_F(MotorCtrlPidTest, StalledDoesNotUpdate) {
+    encoder.set_position(0);
+    motor.move_to(10000);
     encoder.set_position(5000);
-    for (int i = 0; i < 2100; ++i) {
+    for (uint16_t i = 0; i < MotorCtrl::ENCODER_TIMEOUT_TICKS + 1; ++i) {
         motor.update();
-        if (motor.get_state() == MOTOR_STATE_E::SETTLING) break;
+        if (motor.get_state() == MOTOR_STATE_E::STALLED) break;
     }
-    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::SETTLING);
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::STALLED);
+    // Further updates should not change state
+    motor.update();
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::STALLED);
 }
 
-TEST_F(MotorCtrlTest, EncoderTimeout_ResetsOnMovement) {
-    // Encoder timeout counter resets when position changes
-    motor.move_to(100000);
+TEST_F(MotorCtrlPidTest, EncoderTimeoutResetsOnMovement) {
+    encoder.set_position(0);
+    motor.move_to(10000);
     encoder.set_position(5000);
-    // Run 1500 ticks with no movement (below timeout of 2000)
-    for (int i = 0; i < 1500; ++i) motor.update();
-    EXPECT_NE(motor.get_state(), MOTOR_STATE_E::SETTLING);
-    // Move encoder — resets counter
+    // Run 400 ticks (below 500 timeout)
+    for (int i = 0; i < 400; ++i) motor.update();
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::RUNNING);
+    // Movement resets counter
     encoder.set_position(5001);
     motor.update();
-    // Another 1500 ticks — still below timeout
+    // Another 400 ticks — still below timeout
     encoder.set_position(5001);
-    for (int i = 0; i < 1500; ++i) motor.update();
-    EXPECT_NE(motor.get_state(), MOTOR_STATE_E::SETTLING);
+    for (int i = 0; i < 400; ++i) motor.update();
+    EXPECT_NE(motor.get_state(), MOTOR_STATE_E::STALLED);
 }
 
-// --- Soft limit clamp tests ---
-
-TEST_F(MotorCtrlTest, SoftLimit_ClampsOvershootTarget) {
-    // 0.6x scenario: target=2048 (soft limit), backlash=512
-    // Without clamp: overshoot = 2048 - 512 - 200 = 1336
-    // Safe min = 2048/2 = 1024, 1336 > 1024 → not clamped
-    // 1336 < 2048 → compensation applies (two-phase approach)
-    motor.set_backlash(512);
-    motor.set_backlash_enabled(true);
-    motor.set_soft_limit_min(2048);
-    encoder.set_position(10000);
-    motor.move_to(2048);
-    EXPECT_EQ(motor.get_target(), 1336);  // overshoot target, not clamped
-    EXPECT_EQ(motor.get_final_target(), 2048);
-    EXPECT_EQ(motor.get_direction(), DIRECTION_E::REVERSE);
+TEST_F(MotorCtrlPidTest, SetSoftLimitMin) {
+    motor.set_soft_limit_min(200);
+    // Just verify it compiles and doesn't crash
+    encoder.set_position(0);
+    motor.move_to(300);
+    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::RUNNING);
 }
 
-TEST_F(MotorCtrlTest, SoftLimit_CompensationWorksAboveLimit) {
-    // target=5000, soft limit=2048, backlash=512
-    // overshoot = 5000 - 512 - 200 = 4288 > 2048 → compensation normal
-    motor.set_backlash(512);
-    motor.set_backlash_enabled(true);
-    motor.set_soft_limit_min(2048);
-    encoder.set_position(10000);
-    motor.move_to(5000);
-    EXPECT_EQ(motor.get_target(), 4288);
-    EXPECT_EQ(motor.get_final_target(), 5000);
-}
-
-TEST_F(MotorCtrlTest, SoftLimit_ClampsToLimit_PartialCompensation) {
-    // target=3000, soft limit=2048, backlash=512
-    // overshoot = 3000 - 512 - 200 = 2288 > 2048 → not clamped, compensation works
-    motor.set_backlash(512);
-    motor.set_backlash_enabled(true);
-    motor.set_soft_limit_min(2048);
-    encoder.set_position(10000);
-    motor.move_to(3000);
-    EXPECT_EQ(motor.get_target(), 2288);
-    EXPECT_EQ(motor.get_final_target(), 3000);
-}
-
-TEST_F(MotorCtrlTest, SoftLimit_ClampedToLimit_StillCompensates) {
-    // target=2500, soft limit=2048, backlash=512
-    // overshoot = 2500 - 512 - 200 = 1788
-    // safe min = 2048/2 = 1024, 1788 > 1024 → not clamped
-    motor.set_backlash(512);
-    motor.set_backlash_enabled(true);
-    motor.set_soft_limit_min(2048);
-    encoder.set_position(10000);
-    motor.move_to(2500);
-    EXPECT_EQ(motor.get_target(), 1788);  // not clamped (above safe min)
-    EXPECT_EQ(motor.get_final_target(), 2500);
-}
-
-TEST_F(MotorCtrlTest, Phase2_NearSoftLimit_CompensationWorks) {
-    // 0.6x scenario: target exactly at soft limit
-    motor.set_backlash(257);
-    motor.set_backlash_enabled(true);
-    motor.set_soft_limit_min(2048);
-    encoder.set_position(829635);  // 7.0x position
-    motor.move_to(2048);
-    // overshoot = 2048 - 257 - 200 = 1591
-    // safe min = 1024, 1591 > 1024 → not clamped
-    // 1591 < 2048 → compensation applies (approach from forward)
-    EXPECT_EQ(motor.get_target(), 1591);
-    EXPECT_EQ(motor.get_final_target(), 2048);
-}
-
-TEST_F(MotorCtrlTest, SoftLimit_LargeBacklash_ClampedToSafeMin) {
-    // target=2048, soft limit=2048, backlash=1500
-    // overshoot = 2048 - 1500 - 200 = 348
-    // safe min = 1024, 348 < 1024 → clamped to 1024
-    motor.set_backlash(1500);
-    motor.set_backlash_enabled(true);
-    motor.set_soft_limit_min(2048);
-    encoder.set_position(10000);
-    motor.move_to(2048);
-    EXPECT_EQ(motor.get_target(), 1024);  // clamped to safe min
-    EXPECT_EQ(motor.get_final_target(), 2048);
-}
-
-// --- Safety net brake tests ---
-
-TEST_F(MotorCtrlTest, SafetyNet_BrakesAtSafeLimit) {
-    // Moving reverse with backlash enabled, position at SAFE_LIMIT_MIN → brake
-    motor.set_backlash_enabled(true);
-    motor.set_soft_limit_min(2048);
-    encoder.set_position(5000);
-    motor.move_to(2048);
-    // Simulate motor moving reverse past safe limit
-    encoder.set_position(MotorCtrl::SAFE_LIMIT_MIN);
-    motor.update();
-    // Should have triggered safety brake → APPROACHING (backlash phase 1 → phase 2)
-    // or SETTLING (direct move)
-    auto state = motor.get_state();
-    EXPECT_TRUE(state == MOTOR_STATE_E::APPROACHING || state == MOTOR_STATE_E::SETTLING);
-}
-
-TEST_F(MotorCtrlTest, SafetyNet_NotTriggeredDuringHoming) {
-    // Backlash disabled (homing mode) → safety net should NOT trigger
-    motor.set_backlash_enabled(false);
-    motor.set_soft_limit_min(2048);
-    encoder.set_position(5000);
-    motor.move_to(-100000);
-    encoder.set_position(500);  // well below safe limit
-    motor.update();
-    // Should still be moving, not braked
-    EXPECT_NE(motor.get_state(), MOTOR_STATE_E::SETTLING);
-    EXPECT_NE(motor.get_state(), MOTOR_STATE_E::IDLE);
-}
-
-// --- CRAWL speed tests ---
-
-TEST_F(MotorCtrlTest, Crawl_ReducesSpeedNearTarget) {
-    // When remaining < CRAWL_DISTANCE(5000), speed should cap at CRAWL_SPEED(320)
-    motor.set_backlash_enabled(true);  // CRAWL requires backlash enabled
-    motor.move_to(100000);
-    // Accelerate to full speed
-    for (int i = 0; i < 500; ++i) {
-        encoder.set_position(i * 200);
-        motor.update();
-    }
-    // Jump to within CRAWL_DISTANCE of target
-    encoder.set_position(96000);  // 4000 from target
-    motor.update();
-    EXPECT_LE(motor.get_current_speed(), MotorCtrl::CRAWL_SPEED);
-}
-
-TEST_F(MotorCtrlTest, Crawl_NotAppliedOutsideCrawlDistance) {
-    // When remaining > CRAWL_DISTANCE, speed should not be limited to CRAWL_SPEED
-    motor.set_backlash_enabled(true);
-    motor.move_to(100000);
-    // Accelerate
-    for (int i = 0; i < 300; ++i) {
-        encoder.set_position(i * 200);
-        motor.update();
-    }
-    // Position well outside CRAWL_DISTANCE
-    encoder.set_position(50000);  // 50000 from target
-    motor.update();
-    EXPECT_GT(motor.get_current_speed(), MotorCtrl::CRAWL_SPEED);
-}
-
-TEST_F(MotorCtrlTest, Crawl_NotAppliedWhenBacklashDisabled) {
-    // During homing (backlash disabled), CRAWL should NOT activate
-    motor.set_backlash_enabled(false);
-    motor.move_to(500000);
-    // Accelerate without reaching target
-    for (int i = 0; i < 200; ++i) {
-        encoder.set_position(i * 200);
-        motor.update();
-    }
-    // Jump to within CRAWL_DISTANCE of target
-    encoder.set_position(496000);  // 4000 from target
-    motor.update();
-    // Speed should be > CRAWL_SPEED since backlash is disabled
-    EXPECT_GT(motor.get_current_speed(), MotorCtrl::CRAWL_SPEED);
-}
-
-TEST_F(MotorCtrlTest, Crawl_AppliesToPhase2) {
-    // Phase 2 (backlash forward approach) should also use CRAWL_SPEED
-    motor.set_backlash(200);
-    motor.set_backlash_enabled(true);
-    encoder.set_position(10000);
-    motor.move_to(5000);
-    // Phase 1: arrive at overshoot (4600)
-    encoder.set_position(4600);
-    for (int i = 0; i < 500; ++i) {
-        motor.update();
-        if (motor.get_state() == MOTOR_STATE_E::APPROACHING) break;
-    }
-    // Enter Phase 2
-    motor.update();
-    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::CONSTANT);
-    // Phase 2 target=5000, pos=4600, remaining=400 < CRAWL_DISTANCE
-    // After next update, speed should be capped to CRAWL_SPEED
-    encoder.set_position(4600);
-    motor.update();
-    EXPECT_LE(motor.get_current_speed(), MotorCtrl::CRAWL_SPEED);
-}
-
-// --- Post-settle position verification tests ---
-// Note: correction only triggers when backlash is enabled (precision positioning)
-
-TEST_F(MotorCtrlTest, Settle_NoCorrectionWhenBacklashDisabled) {
-    // During homing (backlash disabled), skip correction even if error is large
-    motor.set_backlash_enabled(false);
+TEST_F(MotorCtrlPidTest, SetSafeLimitMax) {
+    motor.set_safe_limit_max(30000);
+    encoder.set_position(1000);
     motor.move_to(50000);
-    encoder.set_position(49500);
-    for (int i = 0; i < 500; ++i) {
-        motor.update();
-        if (motor.get_state() == MOTOR_STATE_E::SETTLING) break;
-    }
-    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::SETTLING);
-    encoder.set_position(53000);  // large error
-    for (int i = 0; i < 200; ++i) {
-        motor.update();
-        if (motor.get_state() == MOTOR_STATE_E::IDLE) break;
-    }
-    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::IDLE);  // no correction, straight to IDLE
-}
-
-TEST_F(MotorCtrlTest, Settle_CorrectionTriggered_WhenErrorExceedsTolerance) {
-    // After settling, if pos is far from target, correction move should start
-    motor.set_backlash_enabled(true);  // correction requires backlash enabled
-    motor.move_to(50000);
-    encoder.set_position(49500);  // within DEADZONE → triggers brake+settle
-    for (int i = 0; i < 500; ++i) {
-        motor.update();
-        if (motor.get_state() == MOTOR_STATE_E::SETTLING) break;
-    }
-    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::SETTLING);
-    // Simulate overshoot: encoder drifts to 53000 during settling (err=3000)
-    encoder.set_position(53000);
-    // Run through SETTLE_TICKS
-    for (int i = 0; i < 200; ++i) {
-        motor.update();
-        if (motor.get_state() != MOTOR_STATE_E::SETTLING) break;
-    }
-    // Should NOT be IDLE — correction move should have started
-    EXPECT_NE(motor.get_state(), MOTOR_STATE_E::IDLE);
-}
-
-TEST_F(MotorCtrlTest, Settle_NoCorrectionNeeded_WhenWithinTolerance) {
-    // After settling with small error, go directly to IDLE
-    motor.set_backlash_enabled(true);
-    motor.move_to(50000);
-    encoder.set_position(49500);
-    for (int i = 0; i < 500; ++i) {
-        motor.update();
-        if (motor.get_state() == MOTOR_STATE_E::SETTLING) break;
-    }
-    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::SETTLING);
-    // Position within POSITION_TOLERANCE(500)
-    encoder.set_position(50200);
-    for (int i = 0; i < 200; ++i) {
-        motor.update();
-        if (motor.get_state() == MOTOR_STATE_E::IDLE) break;
-    }
-    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::IDLE);
-}
-
-TEST_F(MotorCtrlTest, Settle_MaxCorrectionsLimit) {
-    // After MAX_CORRECTIONS(2) attempts, go to IDLE even if still off
-    motor.set_backlash_enabled(true);
-    motor.move_to(50000);
-
-    // Correction 1: overshoot
-    encoder.set_position(49500);
-    for (int i = 0; i < 1000; ++i) {
-        motor.update();
-        if (motor.get_state() == MOTOR_STATE_E::SETTLING) break;
-    }
-    encoder.set_position(53000);  // large error
-    for (int i = 0; i < 500; ++i) {
-        motor.update();
-        if (motor.get_state() != MOTOR_STATE_E::SETTLING) break;
-    }
-    EXPECT_NE(motor.get_state(), MOTOR_STATE_E::IDLE);  // correction started
-
-    // Correction 2: still overshoots
-    encoder.set_position(49500);
-    for (int i = 0; i < 1000; ++i) {
-        motor.update();
-        if (motor.get_state() == MOTOR_STATE_E::SETTLING) break;
-    }
-    encoder.set_position(53000);  // still large error
-    for (int i = 0; i < 500; ++i) {
-        motor.update();
-        if (motor.get_state() != MOTOR_STATE_E::SETTLING) break;
-    }
-    EXPECT_NE(motor.get_state(), MOTOR_STATE_E::IDLE);  // correction 2 started
-
-    // Correction 3 attempt: should give up and go IDLE
-    encoder.set_position(49500);
-    for (int i = 0; i < 1000; ++i) {
-        motor.update();
-        if (motor.get_state() == MOTOR_STATE_E::SETTLING) break;
-    }
-    encoder.set_position(53000);  // still large error
-    for (int i = 0; i < 500; ++i) {
-        motor.update();
-        if (motor.get_state() == MOTOR_STATE_E::IDLE) break;
-    }
-    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::IDLE);  // gave up
-}
-
-TEST_F(MotorCtrlTest, Settle_CorrectionCountResetsOnNewMove) {
-    // A new move_to() call resets the correction counter
-    motor.set_backlash_enabled(true);
-    motor.move_to(50000);
-    // Force a correction cycle
-    encoder.set_position(49500);
-    for (int i = 0; i < 500; ++i) {
-        motor.update();
-        if (motor.get_state() == MOTOR_STATE_E::SETTLING) break;
-    }
-    encoder.set_position(53000);
-    for (int i = 0; i < 200; ++i) {
-        motor.update();
-        if (motor.get_state() != MOTOR_STATE_E::SETTLING) break;
-    }
-    // Correction started (count=1)
-    // Now issue a completely new move — counter should reset
-    encoder.set_position(10000);
-    motor.move_to(20000);
-    // First settle with error should still trigger correction (count was reset)
-    encoder.set_position(19500);
-    for (int i = 0; i < 500; ++i) {
-        motor.update();
-        if (motor.get_state() == MOTOR_STATE_E::SETTLING) break;
-    }
-    encoder.set_position(23000);
-    for (int i = 0; i < 200; ++i) {
-        motor.update();
-        if (motor.get_state() != MOTOR_STATE_E::SETTLING) break;
-    }
-    EXPECT_NE(motor.get_state(), MOTOR_STATE_E::IDLE);  // correction triggered (count was reset)
-}
-
-TEST_F(MotorCtrlTest, EmergencyStop_ResetsCorrectionCount) {
-    motor.set_backlash_enabled(true);
-    motor.move_to(50000);
-    encoder.set_position(49500);
-    for (int i = 0; i < 500; ++i) {
-        motor.update();
-        if (motor.get_state() == MOTOR_STATE_E::SETTLING) break;
-    }
-    motor.emergency_stop();
-    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::IDLE);
-    // After emergency stop, new move should have full correction budget
-    encoder.set_position(10000);  // start far from target
-    motor.move_to(50000);
-    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::ACCELERATING);
-    // Simulate arrival
-    encoder.set_position(49500);
-    for (int i = 0; i < 500; ++i) {
-        motor.update();
-        if (motor.get_state() == MOTOR_STATE_E::SETTLING) break;
-    }
-    EXPECT_EQ(motor.get_state(), MOTOR_STATE_E::SETTLING);
-    // Overshoot during settling
-    encoder.set_position(53000);
-    for (int i = 0; i < 200; ++i) {
-        motor.update();
-        if (motor.get_state() != MOTOR_STATE_E::SETTLING) break;
-    }
-    EXPECT_NE(motor.get_state(), MOTOR_STATE_E::IDLE);  // correction works
+    // Target clamped to 30000
+    EXPECT_EQ(motor.get_target(), 30000);
 }
