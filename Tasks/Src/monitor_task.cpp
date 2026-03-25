@@ -64,13 +64,12 @@ void MonitorTask::run_once() {
             m_bSelfTestDone = true;
             m_bSelfTestPassed = true;
         } else {
-            // First boot (no valid FRAM): homing with default backlash
-            m_pMotor->set_backlash(384);
+            // First boot (no valid FRAM): homing (AS5311 full closed-loop)
             CMD_MESSAGE_S stCmd = {cmd::HOMING, 0};
             xQueueSend(g_cmdQueue, &stCmd, 0);
             m_pSm->transition_to(SYSTEM_STATE_E::HOMING);
 #ifndef BUILD_TESTING
-            swo_printf("[BOOT] First boot: homing with default backlash\n");
+            swo_printf("[BOOT] First boot: AS5311 homing (no backlash)\n");
 #endif
             m_bSelfTestDone = true;
             m_bSelfTestPassed = true;
@@ -174,14 +173,74 @@ extern "C" void monitor_task_entry(void* params) {
     g_SystemManager.transition_to(SYSTEM_STATE_E::SELF_TEST);
     swo_printf("[BOOT] ZLENS_DC v1.0 starting...\n");
 
-    // Wait for ADC DMA to complete at least one conversion cycle
-    vTaskDelay(pdMS_TO_TICKS(50));
+    // === AS5311 DEMO: measure total range ===
+    g_Motor.set_vref_mv(2000);
+    swo_printf("[DEMO] Measuring total range...\n");
 
-    TickType_t xLastWake = xTaskGetTickCount();
-    for (;;) {
-        task.run_once();
-        vTaskDelayUntil(&xLastWake, pdMS_TO_TICKS(20));
+    // Phase 1: drive REVERSE until stall (find limit A)
+    swo_printf("[DEMO] Phase1: reverse to limit A\n");
+    g_Motor.set_pwm_test(DIRECTION_E::REVERSE, 800);
+    {
+        int32_t iLastPos = g_Encoder.get_position();
+        uint16_t iStallCount = 0;
+        for (;;) {
+            HAL_IWDG_Refresh(&hiwdg);
+            vTaskDelay(pdMS_TO_TICKS(50));
+            int32_t iPos = g_Encoder.get_position();
+            int32_t iDelta = iPos - iLastPos;
+            if (iDelta < 0) iDelta = -iDelta;
+            if (iDelta < 5) {
+                iStallCount++;
+            } else {
+                iStallCount = 0;
+            }
+            iLastPos = iPos;
+            if (iStallCount >= 20) break;  // 1s no movement = stall
+        }
     }
+    g_Motor.brake_test();
+    vTaskDelay(pdMS_TO_TICKS(300));
+    int32_t iLimitA = g_Encoder.get_position();
+    swo_printf("[DEMO] Limit A = %ld\n", static_cast<long>(iLimitA));
+
+    // Phase 2: drive FORWARD until stall (find limit B)
+    swo_printf("[DEMO] Phase2: forward to limit B\n");
+    g_Motor.set_pwm_test(DIRECTION_E::FORWARD, 800);
+    {
+        int32_t iLastPos = g_Encoder.get_position();
+        uint16_t iStallCount = 0;
+        for (;;) {
+            HAL_IWDG_Refresh(&hiwdg);
+            vTaskDelay(pdMS_TO_TICKS(50));
+            int32_t iPos = g_Encoder.get_position();
+            int32_t iDelta = iPos - iLastPos;
+            if (iDelta < 0) iDelta = -iDelta;
+            if (iDelta < 5) {
+                iStallCount++;
+            } else {
+                iStallCount = 0;
+            }
+            iLastPos = iPos;
+            if (iStallCount >= 20) break;
+        }
+    }
+    g_Motor.brake_test();
+    vTaskDelay(pdMS_TO_TICKS(300));
+    int32_t iLimitB = g_Encoder.get_position();
+    swo_printf("[DEMO] Limit B = %ld\n", static_cast<long>(iLimitB));
+
+    int32_t iTotalRange = iLimitB - iLimitA;
+    if (iTotalRange < 0) iTotalRange = -iTotalRange;
+    swo_printf("[DEMO] TOTAL RANGE = %ld counts (%.1f mm)\n",
+               static_cast<long>(iTotalRange),
+               static_cast<double>(iTotalRange) / 512.0);
+
+    // Idle forever
+    for (;;) {
+        HAL_IWDG_Refresh(&hiwdg);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    // === END DEMO ===
 #else
     (void)params;
 #endif

@@ -71,10 +71,24 @@ protected:
         return results;
     }
 
+    // Trigger stall via ADC current (StallDetect). For non-homing stall tests.
     void trigger_stall(uint16_t adc_val = 800) {
         iAdcCurrent = adc_val;
         for (int i = 0; i < 64 + StallDetect::BLANKING_TICKS + StallDetect::STALL_CONFIRM_COUNT + 10; ++i) {
             task.run_once();
+        }
+    }
+
+    // Trigger homing stall via StallDetect encoder stall (encoder stuck at same position).
+    // During homing FAST/SLOW, motor is driven via set_pwm_test (direct PWM, not PID),
+    // so StallDetect::encoder_stalled() is the primary stall mechanism.
+    void trigger_homing_stall() {
+        iAdcCurrent = 0;  // low ADC — encoder stall, not current stall
+        MotorTask::TASK_STATE_E eBefore = task.get_state();
+        int iMax = StallDetect::BLANKING_TICKS + StallDetect::ENCODER_STALL_TICKS + 20;
+        for (int i = 0; i < iMax; ++i) {
+            task.run_once();
+            if (task.get_state() != eBefore) break;
         }
     }
 
@@ -85,42 +99,34 @@ protected:
         }
     }
 
-    // Run enough ticks for MotorCtrl SETTLING (100) + MotorTask settle detection (100) + margin.
-    // If iSettlePos is given, set encoder to that position once motor enters SETTLING
-    // (so corrections see the correct position and resolve quickly).
+    // Run enough ticks for MotorCtrl to reach IDLE + margin
     void run_settle(int iExtra = 0) {
-        int iTotal = MotorCtrl::SETTLE_TICKS + MotorTask::SETTLE_STABLE_COUNT + 20 + iExtra;
+        int iTotal = MotorTask::SETTLE_STABLE_COUNT + 120 + iExtra;
         for (int i = 0; i < iTotal; ++i)
             task.run_once();
     }
 
-    // Settle variant for backlash tests where encoder position may be outside DEADZONE
-    // of the motor target, causing infinite correction loops in mock (since mock encoder
-    // doesn't move with motor). Forces motor to IDLE via emergency_stop after SETTLING.
-    void run_settle_overshoot() {
-        // Phase 1: run through MotorCtrl SETTLING
-        for (int i = 0; i < MotorCtrl::SETTLE_TICKS + 5; ++i)
+    // Wait for task state to change from current state (i.e., phase transition).
+    void wait_phase_change(MotorTask::TASK_STATE_E eExpected, int max_ticks = 200) {
+        iAdcCurrent = 0;
+        for (int i = 0; i < max_ticks; ++i) {
             task.run_once();
-        // Motor may have started a correction move that can't complete in mock.
-        // Force it to IDLE so MotorTask can proceed with its own settle detection.
-        if (motor.get_state() != MOTOR_STATE_E::IDLE) {
-            motor.emergency_stop();
+            if (task.get_state() != eExpected) break;
         }
-        // Phase 2: MotorTask settle detection
-        for (int i = 0; i < MotorTask::SETTLE_STABLE_COUNT + 20; ++i)
-            task.run_once();
     }
 
     void complete_homing() {
         task.start_homing();
-        trigger_stall(); // FAST → RETRACT
+        // FAST: motor drives reverse, stall at mechanical limit
+        trigger_homing_stall(); // FAST -> RETRACT (encoder set to 0 by handle_stall)
+        // RETRACT: motor target = RETRACT_DISTANCE, set encoder there so motor reaches IDLE
         encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
-        iAdcCurrent = 0;
-        for (int i = 0; i < 120; ++i) task.run_once();
-        trigger_stall(); // SLOW → SETTLE
+        wait_phase_change(MotorTask::TASK_STATE_E::HOMING_RETRACT); // RETRACT done -> SLOW
+        // SLOW: motor drives reverse, stall at mechanical limit
+        trigger_homing_stall(); // SLOW -> SETTLE (encoder set to 0 by handle_stall)
+        // SETTLE: motor target = SETTLE_DISTANCE, set encoder there so motor reaches IDLE
         encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
-        iAdcCurrent = 0;
-        for (int i = 0; i < 120; ++i) task.run_once();
+        wait_phase_change(MotorTask::TASK_STATE_E::HOMING_SETTLE); // SETTLE done -> IDLE
         drain_rsp();
     }
 };
@@ -131,11 +137,10 @@ TEST_F(MotorTaskTest, Init_StateIsIdle) {
 }
 
 // ============================================================
-// SET_ZOOM (0x10) — unchanged cmd, new response format
+// SET_ZOOM (0x10)
 // ============================================================
 
 TEST_F(MotorTaskTest, SetZoom_StartsMotor) {
-
     send_cmd(cmd::SET_ZOOM, 60);
     task.run_once();
 
@@ -144,7 +149,6 @@ TEST_F(MotorTaskTest, SetZoom_StartsMotor) {
 }
 
 TEST_F(MotorTaskTest, SetZoom_Arrived_TwoFrames) {
-
     send_cmd(cmd::SET_ZOOM, 60);
     task.run_once();
 
@@ -183,7 +187,7 @@ TEST_F(MotorTaskTest, HomingFast_StartsReverse) {
 
 TEST_F(MotorTaskTest, HomingFast_StallTriggersRetract) {
     task.start_homing();
-    trigger_stall();
+    trigger_homing_stall();  // motor encoder timeout at limit
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_RETRACT);
     EXPECT_EQ(motor.get_target(), MotorTask::HOMING_RETRACT_DISTANCE);
 }
@@ -200,53 +204,46 @@ TEST_F(MotorTaskTest, HomingFast_EncoderStallTriggersRetract) {
     EXPECT_EQ(motor.get_target(), MotorTask::HOMING_RETRACT_DISTANCE);
 }
 
-TEST_F(MotorTaskTest, HomingSlow_EncoderStallTriggersSettle) {
+TEST_F(MotorTaskTest, HomingSlow_StallViaMotorTimeout_TriggersSettle) {
     task.start_homing();
-    trigger_stall(); // FAST → RETRACT
+    trigger_homing_stall(); // FAST -> RETRACT
     encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
-    // Now in SLOW — encoder stall should trigger settle
-    iAdcCurrent = 100;  // below STALL_THRESHOLD
-    encoder.set_position(0);
-    for (int i = 0; i < StallDetect::BLANKING_TICKS + StallDetect::ENCODER_STALL_TICKS + 10; ++i) {
-        task.run_once();
-    }
+    wait_phase_change(MotorTask::TASK_STATE_E::HOMING_RETRACT); // RETRACT done -> SLOW
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_SLOW);
+    // Now in SLOW — motor encoder timeout should trigger settle
+    encoder.set_position(0);  // encoder stuck at 0 (mechanical limit)
+    trigger_homing_stall(); // SLOW -> SETTLE
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_SETTLE);
     EXPECT_EQ(motor.get_target(), MotorTask::HOMING_SETTLE_DISTANCE);
 }
 
 TEST_F(MotorTaskTest, HomingRetract_DoneTriggersSlow) {
     task.start_homing();
-    trigger_stall(); // FAST → RETRACT
+    trigger_homing_stall(); // FAST -> RETRACT
     encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
+    wait_phase_change(MotorTask::TASK_STATE_E::HOMING_RETRACT);
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_SLOW);
 }
 
 TEST_F(MotorTaskTest, HomingSlow_StallTriggersSettle) {
     task.start_homing();
-    trigger_stall(); // FAST → RETRACT
+    trigger_homing_stall(); // FAST -> RETRACT
     encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
+    wait_phase_change(MotorTask::TASK_STATE_E::HOMING_RETRACT); // RETRACT done -> SLOW
     // Now in SLOW
-    trigger_stall(); // SLOW → SETTLE
+    trigger_homing_stall(); // SLOW -> SETTLE
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_SETTLE);
     EXPECT_EQ(motor.get_target(), MotorTask::HOMING_SETTLE_DISTANCE);
 }
 
 TEST_F(MotorTaskTest, HomingSettle_Complete) {
     task.start_homing();
-    trigger_stall(); // FAST → RETRACT
+    trigger_homing_stall(); // FAST -> RETRACT
     encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
-    trigger_stall(); // SLOW → SETTLE
+    wait_phase_change(MotorTask::TASK_STATE_E::HOMING_RETRACT); // RETRACT done -> SLOW
+    trigger_homing_stall(); // SLOW -> SETTLE
     encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
+    wait_phase_change(MotorTask::TASK_STATE_E::HOMING_SETTLE); // SETTLE done -> IDLE
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
     EXPECT_TRUE(task.is_homing_done());
     auto rsps = drain_rsp();
@@ -255,25 +252,21 @@ TEST_F(MotorTaskTest, HomingSettle_Complete) {
     EXPECT_EQ(rsps[1].cmd, rsp_cmd::HOMING_DONE);
 }
 
-TEST_F(MotorTaskTest, Homing_BacklashDisabled) {
-    motor.set_backlash(200);
-    motor.set_backlash_enabled(true);
+TEST_F(MotorTaskTest, HomingSettleResetsIndexTracking) {
+    // After homing SETTLE completes, encoder.reset_index_tracking() should be called.
+    // We verify by checking that the encoder's index tracking is in a clean state.
     task.start_homing();
-    EXPECT_FALSE(motor.is_backlash_enabled());
-}
-
-TEST_F(MotorTaskTest, Homing_BacklashReenabledAfter) {
-    motor.set_backlash(200);
-    task.start_homing();
-    trigger_stall();
+    trigger_homing_stall(); // FAST -> RETRACT
     encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
-    trigger_stall();
+    wait_phase_change(MotorTask::TASK_STATE_E::HOMING_RETRACT); // RETRACT done -> SLOW
+    trigger_homing_stall(); // SLOW -> SETTLE
     encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
-    EXPECT_TRUE(motor.is_backlash_enabled());
+    wait_phase_change(MotorTask::TASK_STATE_E::HOMING_SETTLE); // SETTLE done -> IDLE
+
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
+    EXPECT_TRUE(task.is_homing_done());
+    // reset_index_tracking() was called — no drift should be flagged
+    EXPECT_FALSE(encoder.is_drift_detected());
 }
 
 // ============================================================
@@ -281,7 +274,6 @@ TEST_F(MotorTaskTest, Homing_BacklashReenabledAfter) {
 // ============================================================
 
 TEST_F(MotorTaskTest, ForceStop_CmdIs0x02) {
-
     send_cmd(cmd::SET_ZOOM, 60);
     task.run_once();
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::MOVING);
@@ -300,7 +292,6 @@ TEST_F(MotorTaskTest, ForceStop_CmdIs0x02) {
 // ============================================================
 
 TEST_F(MotorTaskTest, StallDetected_Response0xE1) {
-
     send_cmd(cmd::SET_ZOOM, 60);
     task.run_once();
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::MOVING);
@@ -319,7 +310,6 @@ TEST_F(MotorTaskTest, StallDetected_Response0xE1) {
 // ============================================================
 
 TEST_F(MotorTaskTest, OvercurrentDetected_Response0xE2) {
-
     send_cmd(cmd::SET_ZOOM, 60);
     task.run_once();
 
@@ -337,7 +327,7 @@ TEST_F(MotorTaskTest, OvercurrentDetected_Response0xE2) {
 // ============================================================
 
 TEST_F(MotorTaskTest, ZoomInc_StepByIndex) {
-    // Start at zoom=10 (index 1), step +1 → zoom=15 (index 2)
+    // Start at zoom=10 (index 1), step +1 -> zoom=15 (index 2)
     int32_t iPos10 = zoom.get_position(10);
     encoder.set_position(iPos10);
 
@@ -368,7 +358,7 @@ TEST_F(MotorTaskTest, ZoomInc_AtMax_ReturnsError) {
 // ============================================================
 
 TEST_F(MotorTaskTest, ZoomDec_StepByIndex) {
-    // Start at zoom=60 (index 11), step -1 → zoom=55 (index 10)
+    // Start at zoom=60 (index 11), step -1 -> zoom=55 (index 10)
     int32_t iPos60 = zoom.get_position(60);
     encoder.set_position(iPos60);
 
@@ -396,7 +386,6 @@ TEST_F(MotorTaskTest, ZoomDec_AtMin_ReturnsError) {
 
 TEST_F(MotorTaskTest, SetZoom_InvalidZoom_ReturnsError) {
     encoder.set_position(0);
-
     send_cmd(cmd::SET_ZOOM, 99); // 9.9x not in table
     task.run_once();
 
@@ -411,14 +400,12 @@ TEST_F(MotorTaskTest, SetZoom_InvalidZoom_ReturnsError) {
 // ============================================================
 
 TEST_F(MotorTaskTest, CycleStart_CmdIs0x30) {
-
     send_cmd(cmd::CYCLE_START, 0x0105); // step=1, dwell=5
     task.run_once();
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::CYCLING);
 }
 
 TEST_F(MotorTaskTest, CycleStop_CmdIs0x31) {
-
     task.start_cycle(1, 1);
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::CYCLING);
 
@@ -436,7 +423,6 @@ TEST_F(MotorTaskTest, CycleStop_CmdIs0x31) {
 // ============================================================
 
 TEST_F(MotorTaskTest, PowerDown_EmergencyStop) {
-
     send_cmd(cmd::SET_ZOOM, 60);
     task.run_once();
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::MOVING);
@@ -474,233 +460,31 @@ TEST_F(MotorTaskTest, PowerDown_SetsSpiEmergency) {
 // ============================================================
 
 TEST_F(MotorTaskTest, CycleZoom_StepsThrough) {
-
     task.start_cycle(1, 1);
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::CYCLING);
 }
 
 TEST_F(MotorTaskTest, CycleZoom_ReversesAtLimit) {
-
     encoder.set_position(99000);
     task.start_cycle(1, 1);
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::CYCLING);
 }
 
 // ============================================================
-// Backlash Measurement (Task 6)
+// Homing -> no diagnostics chain (simplified)
 // ============================================================
-
-// Helper: complete_homing is defined as a fixture method above
-// (We add it to the fixture class via a lambda-like approach in each test,
-//  but since we can't modify the fixture easily, we use a local helper.)
-
-TEST_F(MotorTaskTest, BacklashMeasure_StartsMovingToMid) {
-    // Complete homing first
-    task.start_homing();
-    trigger_stall(); // FAST → RETRACT
-    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
-    trigger_stall(); // SLOW → SETTLE
-    encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
-    drain_rsp();
-
-    task.start_backlash_measure();
-    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::BACKLASH_MEASURE);
-    EXPECT_EQ(motor.get_target(), MotorTask::BL_MEASURE_MID);
-}
-
-TEST_F(MotorTaskTest, BacklashMeasure_DisablesCompensation) {
-    task.start_homing();
-    trigger_stall();
-    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
-    trigger_stall();
-    encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
-    drain_rsp();
-
-    motor.set_backlash_enabled(true);
-    task.start_backlash_measure();
-    EXPECT_FALSE(motor.is_backlash_enabled());
-}
-
-TEST_F(MotorTaskTest, BacklashMeasure_FullCycle_SetsBacklash) {
-    task.start_homing();
-    trigger_stall();
-    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
-    trigger_stall();
-    encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
-    drain_rsp();
-
-    task.start_backlash_measure();
-
-    encoder.set_position(MotorTask::BL_MEASURE_MID);
-    run_settle();
-
-    for (int cycle = 0; cycle < 8; ++cycle) {
-        encoder.set_position(MotorTask::BL_MEASURE_MID - MotorTask::BL_REVERSE_DIST);
-        run_settle();
-        encoder.set_position(MotorTask::BL_MEASURE_MID + 80);
-        run_settle_overshoot();
-    }
-
-    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
-    EXPECT_EQ(motor.get_backlash(), 30);
-}
-
-TEST_F(MotorTaskTest, BacklashMeasure_ZeroError_BacklashIsZero) {
-    complete_homing();
-    task.start_backlash_measure();
-
-    encoder.set_position(MotorTask::BL_MEASURE_MID);
-    run_settle();
-
-    for (int cycle = 0; cycle < 8; ++cycle) {
-        encoder.set_position(MotorTask::BL_MEASURE_MID - MotorTask::BL_REVERSE_DIST);
-        run_settle();
-        encoder.set_position(MotorTask::BL_MEASURE_MID);
-        run_settle();
-    }
-
-    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
-    EXPECT_EQ(motor.get_backlash(), 0);
-}
-
-// ============================================================
-// Accuracy Test (Task 7)
-// ============================================================
-
-TEST_F(MotorTaskTest, AccuracyTest_StartsMovingToStart) {
-    complete_homing();
-    task.start_accuracy_test();
-    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::ACCURACY_TEST);
-    // After homing, position=HOMING_SETTLE_DISTANCE(2048).
-    // ACC_START_POS(2048) == HOMING_SETTLE_DISTANCE,
-    // so move_to returns IDLE immediately — motor already at start.
-}
-
-TEST_F(MotorTaskTest, AccuracyTest_EnablesBacklash) {
-    complete_homing();
-    motor.set_backlash_enabled(false);
-    task.start_accuracy_test();
-    EXPECT_TRUE(motor.is_backlash_enabled());
-}
-
-TEST_F(MotorTaskTest, AccuracyTest_CompletesAfterAllTrips) {
-    complete_homing();
-    motor.set_backlash(0);
-    task.start_accuracy_test();
-
-    encoder.set_position(MotorTask::ACC_START_POS);
-    run_settle();
-
-    for (int trip = 0; trip < MotorTask::ACC_NUM_TRIPS; ++trip) {
-        encoder.set_position(MotorTask::ACC_END_POS);
-        run_settle();
-        encoder.set_position(MotorTask::ACC_START_POS);
-        run_settle();
-    }
-
-    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
-}
-
-// ============================================================
-// 0x60 Full Diagnostics Chain (Task 8)
-// ============================================================
-
-TEST_F(MotorTaskTest, HomingFullDiag_ChainsToBacklashMeasure) {
-    sm.transition_to(SYSTEM_STATE_E::HOMING);
-    task.start_homing(true);  // full diagnostics
-    // Complete homing
-    trigger_stall(); // FAST -> RETRACT
-    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
-    trigger_stall(); // SLOW -> SETTLE
-    encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
-
-    // Should chain to BACKLASH_MEASURE, not IDLE
-    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::BACKLASH_MEASURE);
-}
 
 TEST_F(MotorTaskTest, HomingNoDiag_GoesToIdle) {
     sm.transition_to(SYSTEM_STATE_E::HOMING);
-    task.start_homing(false);  // no diagnostics
-    trigger_stall();
+    task.start_homing();
+    trigger_homing_stall(); // FAST -> RETRACT
     encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
-    trigger_stall();
+    wait_phase_change(MotorTask::TASK_STATE_E::HOMING_RETRACT); // RETRACT done -> SLOW
+    trigger_homing_stall(); // SLOW -> SETTLE
     encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
+    wait_phase_change(MotorTask::TASK_STATE_E::HOMING_SETTLE); // SETTLE done -> IDLE
 
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
-}
-
-TEST_F(MotorTaskTest, FullDiag_ChainsBacklashToAccuracy) {
-    sm.transition_to(SYSTEM_STATE_E::HOMING);
-    task.start_homing(true);
-    // Complete homing
-    trigger_stall();
-    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
-    trigger_stall();
-    encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
-
-    // Now in BACKLASH_MEASURE - complete it
-    encoder.set_position(MotorTask::BL_MEASURE_MID);
-    run_settle();
-    for (int cycle = 0; cycle < 8; ++cycle) {
-        encoder.set_position(MotorTask::BL_MEASURE_MID - MotorTask::BL_REVERSE_DIST);
-        run_settle();
-        encoder.set_position(MotorTask::BL_MEASURE_MID);
-        run_settle();
-    }
-
-    // Should chain to ACCURACY_TEST
-    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::ACCURACY_TEST);
-}
-
-TEST_F(MotorTaskTest, BacklashMeasure_SavesBacklashToQueue) {
-    complete_homing();
-    task.start_backlash_measure();
-
-    encoder.set_position(MotorTask::BL_MEASURE_MID);
-    run_settle();
-
-    for (int cycle = 0; cycle < 8; ++cycle) {
-        encoder.set_position(MotorTask::BL_MEASURE_MID - MotorTask::BL_REVERSE_DIST);
-        run_settle();
-        encoder.set_position(MotorTask::BL_MEASURE_MID + 80);
-        run_settle_overshoot();
-    }
-
-    // Check save queue has backlash data
-    SAVE_MESSAGE_S save;
-    bool bFoundBacklash = false;
-    while (receive_save(save)) {
-        if (save.backlash_valid == 0xFF) {
-            EXPECT_EQ(save.backlash_counts, 30);  // 80 - BL_DEADZONE(50)
-            bFoundBacklash = true;
-            break;
-        }
-    }
-    EXPECT_TRUE(bFoundBacklash);
 }
 
 TEST_F(MotorTaskTest, SendSave_DefaultBacklashFieldsZero) {
@@ -718,24 +502,6 @@ TEST_F(MotorTaskTest, SendSave_DefaultBacklashFieldsZero) {
     EXPECT_EQ(save.backlash_valid, 0);
 }
 
-TEST_F(MotorTaskTest, HomingCmd_Param1_FullDiag) {
-    sm.transition_to(SYSTEM_STATE_E::HOMING);
-    send_cmd(cmd::HOMING, 1);  // param=1 -> full diagnostics
-    task.run_once();
-    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_FAST);
-    // Complete homing
-    trigger_stall();
-    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
-    trigger_stall();
-    encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
-    // Should chain to BACKLASH_MEASURE because param=1
-    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::BACKLASH_MEASURE);
-}
-
 // ============================================================
 // duty_to_pwm / pwm_to_duty conversion
 // ============================================================
@@ -743,10 +509,10 @@ TEST_F(MotorTaskTest, HomingCmd_Param1_FullDiag) {
 TEST_F(MotorTaskTest, DutyToPwm_BoundaryValues) {
     EXPECT_EQ(MotorCtrl::duty_to_pwm(0), 0);
     EXPECT_EQ(MotorCtrl::duty_to_pwm(1000), MotorCtrl::PWM_ARR);
-    // DEFAULT_SPEED_DUTY(188) → PWM≈800
+    // DEFAULT_SPEED_DUTY(188) -> PWM~800
     uint16_t iPwm = MotorCtrl::duty_to_pwm(rsp::DEFAULT_SPEED_DUTY);
     EXPECT_NEAR(iPwm, 800, 5);
-    // DEFAULT_MIN_SPEED_DUTY(112) ≈ MIN_SPEED(480)
+    // DEFAULT_MIN_SPEED_DUTY(112) ~ MIN_SPEED(480)
     uint16_t iPwmMin = MotorCtrl::duty_to_pwm(rsp::DEFAULT_MIN_SPEED_DUTY);
     EXPECT_NEAR(iPwmMin, MotorCtrl::MIN_SPEED, 5);
 }
@@ -759,7 +525,7 @@ TEST_F(MotorTaskTest, PwmToDuty_RoundTrip) {
 }
 
 // ============================================================
-// 0x60 Speed Commands
+// 0x60 Speed Commands (protocol compatibility — PID ignores speed setting)
 // ============================================================
 
 TEST_F(MotorTaskTest, SetSpeed_SetsSpeedAndResponds) {
@@ -770,9 +536,6 @@ TEST_F(MotorTaskTest, SetSpeed_SetsSpeedAndResponds) {
     EXPECT_TRUE(receive_rsp(rsp));
     EXPECT_EQ(rsp.cmd, rsp_cmd::SPEED);
     EXPECT_EQ(rsp.param, 200);
-
-    // Motor speed limit should be updated
-    EXPECT_EQ(motor.get_max_speed(), MotorCtrl::duty_to_pwm(200));
 }
 
 TEST_F(MotorTaskTest, SetSpeed_ClampsToMaxDuty) {
@@ -887,7 +650,7 @@ TEST_F(MotorTaskTest, SetMinSpeed_RaisesCurrentSpeed) {
     task.run_once();
     drain_rsp();
 
-    // Set min to 200 → current should raise to 200
+    // Set min to 200 -> current should raise to 200
     send_cmd(cmd::SET_MIN_SPEED, 200);
     task.run_once();
 
@@ -895,13 +658,10 @@ TEST_F(MotorTaskTest, SetMinSpeed_RaisesCurrentSpeed) {
     EXPECT_TRUE(receive_rsp(rsp));
     EXPECT_EQ(rsp.cmd, rsp_cmd::SPEED);
     EXPECT_EQ(rsp.param, 200);  // response is the new min
-
-    // Motor should reflect the raised speed
-    EXPECT_EQ(motor.get_max_speed(), MotorCtrl::duty_to_pwm(200));
 }
 
 TEST_F(MotorTaskTest, SetMaxSpeed_LowersCurrentSpeed) {
-    // Set speed to 250 first, then set max to 200 → current should drop to 200
+    // Set speed to 250 first, then set max to 200 -> current should drop to 200
     send_cmd(cmd::SET_SPEED, 250);
     task.run_once();
     drain_rsp();
@@ -913,9 +673,6 @@ TEST_F(MotorTaskTest, SetMaxSpeed_LowersCurrentSpeed) {
     EXPECT_TRUE(receive_rsp(rsp));
     EXPECT_EQ(rsp.cmd, rsp_cmd::SPEED);
     EXPECT_EQ(rsp.param, 200);
-
-    // Motor speed limit should be capped at 200
-    EXPECT_EQ(motor.get_max_speed(), MotorCtrl::duty_to_pwm(200));
 }
 
 TEST_F(MotorTaskTest, SetMaxSpeed_SavesSpeedToQueue) {
@@ -928,22 +685,20 @@ TEST_F(MotorTaskTest, SetMaxSpeed_SavesSpeedToQueue) {
     EXPECT_EQ(save.max_speed_duty, 500);
 }
 
-TEST_F(MotorTaskTest, SelfTest0x65_TriggersFullDiagHoming) {
+TEST_F(MotorTaskTest, SelfTest0x65_TriggersHoming) {
     send_cmd(cmd::SELF_TEST, 0);
     task.run_once();
 
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::HOMING_FAST);
     // Complete homing
-    trigger_stall();
+    trigger_homing_stall(); // FAST -> RETRACT
     encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
-    trigger_stall();
+    wait_phase_change(MotorTask::TASK_STATE_E::HOMING_RETRACT); // RETRACT done -> SLOW
+    trigger_homing_stall(); // SLOW -> SETTLE
     encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
-    // Full diag → chains to BACKLASH_MEASURE
-    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::BACKLASH_MEASURE);
+    wait_phase_change(MotorTask::TASK_STATE_E::HOMING_SETTLE); // SETTLE done -> IDLE
+    // Goes to IDLE (no diagnostics chain)
+    EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
 }
 
 TEST_F(MotorTaskTest, SelfTest0x65_IgnoredWhenBusy) {
@@ -957,38 +712,12 @@ TEST_F(MotorTaskTest, SelfTest0x65_IgnoredWhenBusy) {
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::MOVING);
 }
 
-TEST_F(MotorTaskTest, HomingComplete_RestoresUserSpeed) {
-    // Set speed to 200 (non-default)
-    send_cmd(cmd::SET_SPEED, 200);
-    task.run_once();
-    drain_rsp();
-
-    // Do homing
-    sm.transition_to(SYSTEM_STATE_E::HOMING);
-    task.start_homing(false);
-    trigger_stall();
-    encoder.set_position(MotorTask::HOMING_RETRACT_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
-    trigger_stall();
-    encoder.set_position(MotorTask::HOMING_SETTLE_DISTANCE);
-    iAdcCurrent = 0;
-    for (int i = 0; i < 120; ++i) task.run_once();
-    drain_rsp();
-
-    // After homing, speed should be restored to user's 200, not MAX_SPEED
-    EXPECT_EQ(motor.get_max_speed(), MotorCtrl::duty_to_pwm(200));
-}
-
 TEST_F(MotorTaskTest, RestoreSpeed_ClampsAndApplies) {
-    task.restore_speed(500, 100, 600);
-    EXPECT_EQ(motor.get_max_speed(), MotorCtrl::duty_to_pwm(500));
-
     // Clamp: speed below min
     task.restore_speed(50, 100, 600);
-    EXPECT_EQ(motor.get_max_speed(), MotorCtrl::duty_to_pwm(100));
+    // No motor speed setter to verify — just verify no crash
 
     // Clamp: speed above max
     task.restore_speed(700, 100, 600);
-    EXPECT_EQ(motor.get_max_speed(), MotorCtrl::duty_to_pwm(600));
+    // No crash = pass
 }

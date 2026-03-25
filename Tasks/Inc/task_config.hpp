@@ -136,9 +136,9 @@ extern volatile bool g_bSpiEmergency;
 
 // --- Homing mechanical parameters ---
 namespace homing {
-    constexpr int32_t RETRACT_DISTANCE = 4096;     // 粗定位后回退距离
-    constexpr int32_t SETTLE_DISTANCE  = 2048;     // 归零稳定偏移 (= ZoomTable::HOME_OFFSET)
-    constexpr int32_t FAR_DISTANCE     = 1000000;  // 归零远距离移动
+    constexpr int32_t RETRACT_DISTANCE = 256;      // ~0.5mm retract after coarse limit
+    constexpr int32_t SETTLE_DISTANCE  = 128;      // = HOME_OFFSET
+    constexpr int32_t FAR_DISTANCE     = 100000;   // far-distance homing move
 } // namespace homing
 
 } // namespace zlens

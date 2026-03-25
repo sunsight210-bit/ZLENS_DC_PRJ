@@ -94,9 +94,7 @@ TEST_F(MonitorTaskTest, FirstBoot_HomingOnly_DefaultBacklash) {
     bool bGotCmd = xQueueReceive(g_cmdQueue, &stCmd, 0) == pdTRUE;
     EXPECT_TRUE(bGotCmd);
     EXPECT_EQ(stCmd.cmd, cmd::HOMING);
-    EXPECT_EQ(stCmd.param, 0);  // param=0 → homing only, no diagnostics
-    // Default backlash set
-    EXPECT_EQ(motor.get_backlash(), 384);
+    EXPECT_EQ(stCmd.param, 0);  // param=0 → homing only
 }
 
 TEST_F(MonitorTaskTest, FirstBoot_LowVoltage_StillHomesOnly) {

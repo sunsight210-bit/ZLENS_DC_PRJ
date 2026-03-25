@@ -17,7 +17,6 @@ public:
         IDLE, MOVING,
         HOMING_FAST, HOMING_RETRACT, HOMING_SLOW, HOMING_SETTLE,
         CYCLING,
-        BACKLASH_MEASURE, ACCURACY_TEST,
         STALL_CURRENT_TEST
     };
 
@@ -27,7 +26,7 @@ public:
               uint16_t* pAdcCurrent);
 
     void run_once();
-    void start_homing(bool bFullDiag = false);
+    void start_homing();
     bool is_homing_done() const { return m_bHomingDone; }
     void start_cycle(int8_t iStep, uint8_t iDwell_x100ms);
     void stop_cycle();
@@ -37,25 +36,10 @@ public:
     static constexpr int32_t HOMING_RETRACT_DISTANCE = homing::RETRACT_DISTANCE;
     static constexpr int32_t HOMING_SETTLE_DISTANCE  = homing::SETTLE_DISTANCE;
     static constexpr int32_t HOMING_FAR_DISTANCE     = homing::FAR_DISTANCE;
-    static constexpr uint16_t HOMING_FAST_SPEED = MotorCtrl::MAX_SPEED / 2;
-    static constexpr uint16_t HOMING_SLOW_SPEED = 800;    // ~19% duty, slow approach for precise limit
-    static constexpr uint16_t HOMING_SETTLE_SPEED = 1000; // ~23% duty, settle + retract
 
     // Settle detection
     static constexpr uint16_t SETTLE_STABLE_COUNT = 100;  // 100ms at 1ms/tick
 
-    // Backlash measurement constants
-    static constexpr int32_t BL_DEADZONE = 50;      // backlash measurement dedicated deadzone
-    static constexpr int32_t BL_MEASURE_MID = 434781;  // ≈2.5x 中点
-    static constexpr int32_t BL_REVERSE_DIST = 4096;
-
-    // Accuracy test constants
-    static constexpr uint8_t ACC_NUM_TRIPS = 8;
-    static constexpr int32_t ACC_START_POS = 2048;      // 0.6x position = HOME_OFFSET
-    static constexpr int32_t ACC_END_POS = 829635;      // 7.0x position
-
-    void start_backlash_measure();
-    void start_accuracy_test();
     void start_stall_current_test();
     void restore_speed(uint16_t iSpeedDuty, uint16_t iMinDuty, uint16_t iMaxDuty);
 
@@ -65,7 +49,7 @@ public:
     static constexpr uint16_t STALL_TEST_SPEEDS[3] = {1280, 2133, 3413};  // 30%, 50%, 80% of PWM_ARR
     static constexpr uint16_t STALL_TEST_ZOOM_X10  = 20;    // 2.0x 测试位置
     static constexpr uint16_t STALL_PRINT_INTERVAL = 500;   // ADC 打印间隔 (ms)
-    static constexpr uint16_t HEARTBEAT_INTERVAL   = 500;   // 心跳间隔 (ms) — 缩短用于编码器验证
+    static constexpr uint16_t HEARTBEAT_INTERVAL   = 500;   // 心跳间隔 (ms)
 
 private:
     MotorCtrl* m_pMotor = nullptr;
@@ -83,7 +67,6 @@ private:
 
     TASK_STATE_E m_eTaskState = TASK_STATE_E::IDLE;
     bool m_bHomingDone = false;
-    bool m_bFullDiagnostics = false;
     bool m_bStallTestPending = false;
 
     // Speed state (0x60 group)
@@ -98,7 +81,7 @@ private:
     uint16_t m_iCurrentZoom = 0;
     bool m_bCycleWaiting = false;
 
-    // Settle detection — reusable by backlash measurement and accuracy test
+    // Settle detection
     uint16_t m_iSettleCount = 0;
     int32_t m_iSettleLastPos = 0;
     bool m_bSettling = false;
@@ -106,29 +89,6 @@ private:
     void reset_settle();
     bool is_settled();
     int32_t get_settled_position() const { return m_iSettleLastPos; }
-
-    // Backlash measurement sub-states
-    enum class BL_MEASURE_PHASE_E : uint8_t {
-        MOVE_TO_MID, SETTLE_MID,
-        REVERSE, SETTLE_REV,
-        FORWARD, SETTLE_FWD
-    };
-    BL_MEASURE_PHASE_E m_eBLPhase = BL_MEASURE_PHASE_E::MOVE_TO_MID;
-    int32_t m_iBLRefPos = 0;
-    int32_t m_aBLSamples[8] = {};
-    uint8_t m_iBLSampleIdx = 0;
-
-    // Accuracy test sub-states
-    enum class ACC_TEST_PHASE_E : uint8_t {
-        MOVE_TO_START, SETTLE_START,
-        MOVE_TO_END, SETTLE_END,
-        MOVE_TO_START_RETURN, SETTLE_RETURN
-    };
-    ACC_TEST_PHASE_E m_eAccPhase = ACC_TEST_PHASE_E::MOVE_TO_START;
-    uint8_t m_iAccTripCount = 0;
-    int32_t m_iAccRefPos = 0;
-    int32_t m_aAccErrors[16] = {};  // 8 trips × 2 directions
-    uint8_t m_iAccErrorIdx = 0;
 
     // Stall current test sub-states
     enum class STALL_TEST_PHASE_E : uint8_t {
@@ -149,9 +109,6 @@ private:
     void process_moving();
     void process_homing();
     void process_cycling();
-    void process_backlash_measure();
-    void process_accuracy_test();
-    void print_accuracy_report();
     void process_stall_current_test();
     void print_stall_current_report();
     void handle_stall();

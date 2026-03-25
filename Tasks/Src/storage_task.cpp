@@ -109,10 +109,7 @@ extern "C" void storage_task_entry(void* params) {
     FRAM_PARAMS_S stParams;
     if (task.restore_params(stParams)) {
         g_Encoder.set_position(stParams.current_position);
-        if (stParams.backlash_valid == 0xFF) {
-            g_Motor.set_backlash(stParams.backlash_counts);
-        }
-        g_Motor.set_backlash_enabled(true);
+        // backlash no longer used (PID closed-loop)
     }
 
     TickType_t xLastWake = xTaskGetTickCount();
