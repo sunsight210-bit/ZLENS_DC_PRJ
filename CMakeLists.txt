@@ -75,6 +75,11 @@ else()
         Tasks/Inc
     )
 
+    option(PID_TUNE_LOG "Enable PID tuning SWO output" OFF)
+    if(PID_TUNE_LOG)
+        target_compile_definitions(${PROJECT_NAME}.elf PRIVATE PID_TUNE_LOG)
+    endif()
+
     # Post-build: generate .hex/.bin and print size
     add_custom_command(TARGET ${PROJECT_NAME}.elf POST_BUILD
         COMMAND ${CMAKE_OBJCOPY} -O ihex  $<TARGET_FILE:${PROJECT_NAME}.elf> ${PROJECT_NAME}.hex
