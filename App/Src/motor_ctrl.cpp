@@ -124,7 +124,7 @@ void MotorCtrl::update() {
 void MotorCtrl::set_vref_mv(uint16_t mv) {
     if (!m_pHdac) return;
     uint32_t dac_val = static_cast<uint32_t>(mv) * 4095 / 3300;
-    HAL_DAC_SetValue(m_pHdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R, dac_val);
+    HAL_DAC_SetValue(m_pHdac, DAC_CHANNEL_2, DAC_ALIGN_12B_R, dac_val);
 }
 
 void MotorCtrl::set_pwm(DIRECTION_E dir, uint16_t speed) {
