@@ -152,3 +152,11 @@ zlens_add_test(test_monitor_task test_monitor_task.cpp
     ${CMAKE_SOURCE_DIR}/App/Src/zoom_table.cpp
     ${CMAKE_SOURCE_DIR}/App/Src/crc16.cpp
 )
+
+# PidCtrl 单元测试
+add_executable(test_pid_ctrl test_pid_ctrl.cpp)
+target_include_directories(test_pid_ctrl PRIVATE
+    ${PROJECT_SOURCE_DIR}/App/Inc
+    ${PROJECT_SOURCE_DIR}/Test/mocks)
+target_link_libraries(test_pid_ctrl GTest::gtest_main)
+add_test(NAME test_pid_ctrl COMMAND test_pid_ctrl)
