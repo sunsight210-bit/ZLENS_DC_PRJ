@@ -33,7 +33,7 @@ public:
     }
 
 private:
-    static constexpr float MAX_OUTPUT = 1200.0f;
+    static constexpr float MAX_OUTPUT = 1920.0f;
     float m_fIntegral = 0;
     int32_t m_iLastPos = 0;
 };

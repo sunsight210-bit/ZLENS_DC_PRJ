@@ -74,9 +74,9 @@ namespace rsp {
     constexpr uint16_t ARRIVED_PARAM      = 0x000A;
     constexpr uint16_t REQ_INVALID_PARAM  = 0x000E;
     constexpr uint16_t FW_VERSION         = 0x0100;  // v1.00 (high=major, low=minor)
-    constexpr uint16_t DEFAULT_SPEED_DUTY     = 188;  // PWM≈800 (~18.8%)
-    constexpr uint16_t DEFAULT_MIN_SPEED_DUTY = 112;  // PWM≈478 (~11.2%)
-    constexpr uint16_t DEFAULT_MAX_SPEED_DUTY = 281;  // PWM≈1198 (~28.1%)
+    constexpr uint16_t DEFAULT_SPEED_DUTY     = 300;  // CCR=1920 (30.0%)
+    constexpr uint16_t DEFAULT_MIN_SPEED_DUTY =  40;  // CCR=256  (4.0%)
+    constexpr uint16_t DEFAULT_MAX_SPEED_DUTY = 300;  // CCR=1920 (30.0%)
     constexpr uint16_t POWER_DOWN         = 0x0005;
 } // namespace rsp
 

@@ -47,19 +47,25 @@ volatile uint16_t g_aAdcDmaBuf[2] = {0, 0};
 
 namespace {
 
-constexpr uint16_t HOMING_SPEED     = 480;   // MIN_SPEED for homing
+constexpr uint16_t HOMING_SPEED     = 480;
 constexpr uint32_t STALL_TIMEOUT_MS = 500;
-constexpr uint32_t NUM_LAPS         = 20;    // 往复趟数
+constexpr uint32_t NUM_LAPS         = 10;
 
-// 1.0X 和 2.0X 的目标位置 (from zoom_table: HOME_OFFSET + angle*TOTAL_RANGE/36000)
-// 1.0X: 72° → 128 + 7200*65536/36000 = 13235
-// 2.0X: 148° → 128 + 14800*65536/36000 = 27070
-constexpr int32_t POS_1X = 13235;
-constexpr int32_t POS_2X = 27070;
-
-// Backlash offset compensation (applied at caller level, not in motor_ctrl)
-constexpr int32_t OFFSET_FWD = 0;    // No offset — testing new PID params raw accuracy
-constexpr int32_t OFFSET_REV = 0;
+// 目标位置: HOME_OFFSET(128) + angle_x100 * 65536 / 36000
+struct ZOOM_TARGET_S {
+    const char* pLabel;
+    int32_t     iPos;
+};
+constexpr ZOOM_TARGET_S TARGETS[] = {
+    {"1.0X", 13235},  // 7200
+    {"2.0X", 27070},  // 14800
+    {"3.0X", 38539},  // 21100
+    {"4.0X", 47004},  // 25750
+    {"5.0X", 53739},  // 29450
+    {"6.0X", 59292},  // 32500
+    {"7.0X", 63295},  // 34700
+};
+constexpr uint32_t NUM_TARGETS = sizeof(TARGETS) / sizeof(TARGETS[0]);
 
 // 开环驱动到限位 (用于 homing)
 void drive_to_stall(zlens::MotorCtrl& motor, zlens::Encoder& encoder,
@@ -106,9 +112,9 @@ static void diag_task_entry(void* params) {
     MotorCtrl& motor = g_Motor;
     Encoder& encoder = g_Encoder;
 
-    swo_printf("[DIAG] === PID REPEATABILITY TEST ===\n");
-    swo_printf("[DIAG] Target: 1.0X=%ld  2.0X=%ld  Laps=%lu\n",
-               static_cast<long>(POS_1X), static_cast<long>(POS_2X),
+    swo_printf("[DIAG] === PID MULTI-ZOOM REPEATABILITY TEST ===\n");
+    swo_printf("[DIAG] Zooms=%lu  Laps=%lu\n",
+               static_cast<unsigned long>(NUM_TARGETS),
                static_cast<unsigned long>(NUM_LAPS));
 
     // === Homing ===
@@ -133,87 +139,70 @@ static void diag_task_entry(void* params) {
     int32_t iHomePos = encoder.get_position();
     swo_printf("[HOME] Done. pos=%ld\n", static_cast<long>(iHomePos));
 
-    // === 往复测试 ===
-    swo_printf("[DIAG] Starting %lu laps...\n", static_cast<unsigned long>(NUM_LAPS));
-    swo_printf("[DIAG] lap,dir,target,actual,error\n");
+    // === 统计数组 ===
+    int32_t aMin[NUM_TARGETS], aMax[NUM_TARGETS];
+    int64_t aSum[NUM_TARGETS];
+    uint32_t aCount[NUM_TARGETS];
+    for (uint32_t z = 0; z < NUM_TARGETS; ++z) {
+        aMin[z] = 999999; aMax[z] = -999999; aSum[z] = 0; aCount[z] = 0;
+    }
 
-    int32_t iMin1X = 999999, iMax1X = -999999;
-    int32_t iMin2X = 999999, iMax2X = -999999;
-    int64_t iSum1X = 0, iSum2X = 0;
-    uint32_t iCount1X = 0, iCount2X = 0;
-
+    // === 往复测试: 1X→7X→1X→7X... ===
+    swo_printf("[DIAG] lap,zoom,target,actual,error\n");
     for (uint32_t iLap = 1; iLap <= NUM_LAPS; ++iLap) {
-        HAL_IWDG_Refresh(&hiwdg);
-
-        // → 2.0X (FWD: apply offset compensation)
-        bool bOk = pid_move_and_wait(motor, encoder, POS_2X + OFFSET_FWD, 5000);
-        vTaskDelay(pdMS_TO_TICKS(200));
-        int32_t iPos = encoder.get_position();
-        int32_t iErr = iPos - POS_2X;
-        swo_printf("[DIAG] %lu,FWD,%ld,%ld,%ld\n",
-                   static_cast<unsigned long>(iLap),
-                   static_cast<long>(POS_2X),
-                   static_cast<long>(iPos),
-                   static_cast<long>(iErr));
-        if (bOk) {
-            iSum2X += iPos;
-            iCount2X++;
-            if (iPos < iMin2X) iMin2X = iPos;
-            if (iPos > iMax2X) iMax2X = iPos;
+        // FWD: 1X → 7X
+        for (uint32_t z = 0; z < NUM_TARGETS; ++z) {
+            HAL_IWDG_Refresh(&hiwdg);
+            bool bOk = pid_move_and_wait(motor, encoder, TARGETS[z].iPos, 5000);
+            vTaskDelay(pdMS_TO_TICKS(200));
+            int32_t iPos = encoder.get_position();
+            int32_t iErr = iPos - TARGETS[z].iPos;
+            swo_printf("[DIAG] %lu,%s,%ld,%ld,%ld\n",
+                       static_cast<unsigned long>(iLap), TARGETS[z].pLabel,
+                       static_cast<long>(TARGETS[z].iPos),
+                       static_cast<long>(iPos), static_cast<long>(iErr));
+            if (bOk) {
+                aSum[z] += iPos; aCount[z]++;
+                if (iPos < aMin[z]) aMin[z] = iPos;
+                if (iPos > aMax[z]) aMax[z] = iPos;
+            }
         }
-
-        HAL_IWDG_Refresh(&hiwdg);
-
-        // → 1.0X (REV: apply offset compensation)
-        bOk = pid_move_and_wait(motor, encoder, POS_1X + OFFSET_REV, 5000);
-        vTaskDelay(pdMS_TO_TICKS(200));
-        iPos = encoder.get_position();
-        iErr = iPos - POS_1X;
-        swo_printf("[DIAG] %lu,REV,%ld,%ld,%ld\n",
-                   static_cast<unsigned long>(iLap),
-                   static_cast<long>(POS_1X),
-                   static_cast<long>(iPos),
-                   static_cast<long>(iErr));
-        if (bOk) {
-            iSum1X += iPos;
-            iCount1X++;
-            if (iPos < iMin1X) iMin1X = iPos;
-            if (iPos > iMax1X) iMax1X = iPos;
+        // REV: 7X → 1X
+        for (int32_t z = NUM_TARGETS - 1; z >= 0; --z) {
+            HAL_IWDG_Refresh(&hiwdg);
+            bool bOk = pid_move_and_wait(motor, encoder, TARGETS[z].iPos, 5000);
+            vTaskDelay(pdMS_TO_TICKS(200));
+            int32_t iPos = encoder.get_position();
+            int32_t iErr = iPos - TARGETS[z].iPos;
+            swo_printf("[DIAG] %lu,%s,%ld,%ld,%ld\n",
+                       static_cast<unsigned long>(iLap), TARGETS[z].pLabel,
+                       static_cast<long>(TARGETS[z].iPos),
+                       static_cast<long>(iPos), static_cast<long>(iErr));
+            if (bOk) {
+                aSum[z] += iPos; aCount[z]++;
+                if (iPos < aMin[z]) aMin[z] = iPos;
+                if (iPos > aMax[z]) aMax[z] = iPos;
+            }
         }
     }
 
     // === 统计 ===
     swo_printf("\n[DIAG] === RESULTS ===\n");
-    if (iCount1X > 0) {
-        int32_t iAvg1X = static_cast<int32_t>(iSum1X / iCount1X);
-        int32_t iRange1X = iMax1X - iMin1X;
-        swo_printf("[DIAG] 1.0X: target=%ld avg=%ld min=%ld max=%ld range=%ld (%lu samples)\n",
-                   static_cast<long>(POS_1X),
-                   static_cast<long>(iAvg1X),
-                   static_cast<long>(iMin1X),
-                   static_cast<long>(iMax1X),
-                   static_cast<long>(iRange1X),
-                   static_cast<unsigned long>(iCount1X));
-        swo_printf("[DIAG] 1.0X repeatability: +/-%ld counts (+/-%.1f um)\n",
-                   static_cast<long>((iRange1X + 1) / 2),
-                   static_cast<double>(iRange1X) * 2.0 / 2.0);  // 1 count ≈ 2µm
+    for (uint32_t z = 0; z < NUM_TARGETS; ++z) {
+        if (aCount[z] > 0) {
+            int32_t iAvg = static_cast<int32_t>(aSum[z] / aCount[z]);
+            int32_t iRange = aMax[z] - aMin[z];
+            swo_printf("[DIAG] %s: target=%ld avg=%ld min=%ld max=%ld range=%ld (%lu)\n",
+                       TARGETS[z].pLabel,
+                       static_cast<long>(TARGETS[z].iPos),
+                       static_cast<long>(iAvg),
+                       static_cast<long>(aMin[z]),
+                       static_cast<long>(aMax[z]),
+                       static_cast<long>(iRange),
+                       static_cast<unsigned long>(aCount[z]));
+        }
     }
-    if (iCount2X > 0) {
-        int32_t iAvg2X = static_cast<int32_t>(iSum2X / iCount2X);
-        int32_t iRange2X = iMax2X - iMin2X;
-        swo_printf("[DIAG] 2.0X: target=%ld avg=%ld min=%ld max=%ld range=%ld (%lu samples)\n",
-                   static_cast<long>(POS_2X),
-                   static_cast<long>(iAvg2X),
-                   static_cast<long>(iMin2X),
-                   static_cast<long>(iMax2X),
-                   static_cast<long>(iRange2X),
-                   static_cast<unsigned long>(iCount2X));
-        swo_printf("[DIAG] 2.0X repeatability: +/-%ld counts (+/-%.1f um)\n",
-                   static_cast<long>((iRange2X + 1) / 2),
-                   static_cast<double>(iRange2X) * 2.0 / 2.0);
-    }
-    swo_printf("[DIAG] DEADZONE=%d counts (%d um)\n",
-               MotorCtrl::DEADZONE, MotorCtrl::DEADZONE * 2);
+    swo_printf("[DIAG] DEADZONE=%d\n", MotorCtrl::DEADZONE);
     swo_printf("[DIAG] === DONE ===\n");
 
     for (;;) {
@@ -231,7 +220,7 @@ extern "C" void app_init(void) {
 
     g_Motor.init(&htim3, &hdac, &g_Encoder);
     HAL_DAC_Start(&hdac, DAC_CHANNEL_2);
-    g_Motor.set_vref_mv(3000);
+    g_Motor.set_vref_mv(3300);
     g_Encoder.init();
     g_StallDetect.init();
     g_ZoomTable.init();

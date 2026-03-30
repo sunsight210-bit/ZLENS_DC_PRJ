@@ -17,10 +17,14 @@ enum class DIRECTION_E { FORWARD, REVERSE };
 
 class MotorCtrl {
 public:
-    static constexpr uint16_t PWM_ARR = 4266;
-    static constexpr uint16_t MAX_SPEED = 1200;
-    static constexpr uint16_t MIN_SPEED = 200;
-    static constexpr int32_t  DEADZONE = 3;            // ~6um
+    static constexpr uint16_t PWM_ARR = 6399;
+    static constexpr uint16_t MAX_SPEED = 1920;
+    static constexpr uint16_t MIN_SPEED = 256;
+    static constexpr int32_t  DEADZONE = 1;
+    // Speed cap tiers (stepped speed limiting)
+    static constexpr int32_t  SPEED_CAP_TIER1 = 4000;
+    static constexpr int32_t  SPEED_CAP_TIER2 = 1000;
+    static constexpr int32_t  SPEED_CAP_TIER3 = 512;
     static constexpr int32_t  SAFE_LIMIT_MIN = 64;     // = HOME_OFFSET / 2
     static constexpr uint16_t ENCODER_TIMEOUT_TICKS = 500;  // 500ms
     static constexpr uint16_t SETTLE_COUNT = 100;      // 100ms brake settle before IDLE

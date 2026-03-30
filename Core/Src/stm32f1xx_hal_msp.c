@@ -346,27 +346,20 @@ void HAL_TIM_Base_MspInit(TIM_HandleTypeDef* htim_base)
 void HAL_TIM_Encoder_MspInit(TIM_HandleTypeDef* htim_encoder)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
-  if(htim_encoder->Instance==TIM8)
+  if(htim_encoder->Instance==TIM4)
   {
-    /* USER CODE BEGIN TIM8_MspInit 0 */
-
-    /* USER CODE END TIM8_MspInit 0 */
     /* Peripheral clock enable */
-    __HAL_RCC_TIM8_CLK_ENABLE();
+    __HAL_RCC_TIM4_CLK_ENABLE();
 
-    __HAL_RCC_GPIOC_CLK_ENABLE();
-    /**TIM8 GPIO Configuration
-    PC6     ------> TIM8_CH1
-    PC7     ------> TIM8_CH2
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    /**TIM4 GPIO Configuration
+    PB6     ------> TIM4_CH1 (AS5311_A)
+    PB7     ------> TIM4_CH2 (AS5311_B)
     */
-    GPIO_InitStruct.Pin = ENCODER_A_Pin|ENCODER_B_Pin;
+    GPIO_InitStruct.Pin = GPIO_PIN_6|GPIO_PIN_7;
     GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
-    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
-
-    /* USER CODE BEGIN TIM8_MspInit 1 */
-
-    /* USER CODE END TIM8_MspInit 1 */
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   }
 

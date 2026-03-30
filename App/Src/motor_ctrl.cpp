@@ -3,6 +3,10 @@
 #include "zoom_table.hpp"
 #include <cstdlib>
 
+#ifdef PID_TUNE_LOG
+void swo_printf(const char* fmt, ...);
+#endif
+
 namespace zlens {
 
 static_assert(MotorCtrl::SAFE_LIMIT_MIN == ZoomTable::HOME_OFFSET / 2,
@@ -83,6 +87,7 @@ void MotorCtrl::update() {
     // consecutive ticks within DEADZONE with no position change
     if (std::abs(iError) <= DEADZONE) {
         brake();
+        m_iNoMoveCount = 0;  // settle period: no-move is expected, not stall
         if (pos == m_iLastPosBeforeUpdate) {
             // Position unchanged this tick
             if (++m_iSettleCount >= SETTLE_COUNT) {
@@ -101,7 +106,16 @@ void MotorCtrl::update() {
     int16_t iOutput = m_Pid.compute(iError, pos);
     uint16_t iSpeed = static_cast<uint16_t>(std::abs(iOutput));
 
-    // Pure PID: clamp to MIN_SPEED to overcome friction, no coast/nudge
+    // Stepped speed cap: limit max CCR based on distance to target
+    int32_t iAbsErr = std::abs(iError);
+    uint16_t iSpeedCap;
+    if      (iAbsErr > SPEED_CAP_TIER1) iSpeedCap = MAX_SPEED;
+    else if (iAbsErr > SPEED_CAP_TIER2) iSpeedCap = 720;
+    else if (iAbsErr > SPEED_CAP_TIER3) iSpeedCap = 360;
+    else                                 iSpeedCap = MIN_SPEED;
+    if (iSpeed > iSpeedCap) iSpeed = iSpeedCap;
+
+    // Clamp to MIN_SPEED to overcome friction
     if (iSpeed < MIN_SPEED) {
         iSpeed = MIN_SPEED;
     }
@@ -112,13 +126,11 @@ void MotorCtrl::update() {
     // Drift detection (no interruption, log only)
     if (m_pEncoder->is_drift_detected()) {
 #ifdef PID_TUNE_LOG
-        extern void swo_printf(const char* fmt, ...);
         swo_printf("[DRIFT]%ld\n", static_cast<int32_t>(m_pEncoder->get_drift_error()));
 #endif
     }
 
 #ifdef PID_TUNE_LOG
-    extern void swo_printf(const char* fmt, ...);
     swo_printf("[PID]%lu,%ld,%ld,%ld,%d\n",
                HAL_GetTick(), m_iTarget, pos, iError, iOutput);
 #endif
