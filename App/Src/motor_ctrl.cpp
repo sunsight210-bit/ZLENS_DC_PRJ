@@ -28,6 +28,7 @@ void MotorCtrl::move_to(int32_t target) {
     if (target > m_iSafeLimitMax) target = m_iSafeLimitMax;
 
     m_iNoMoveCount = 0;
+    m_iRunTicks = 0;
     m_iSettleCount = 0;
 
     int32_t pos = m_pEncoder->get_position();
@@ -88,6 +89,7 @@ void MotorCtrl::update() {
     if (std::abs(iError) <= DEADZONE) {
         brake();
         m_iNoMoveCount = 0;  // settle period: no-move is expected, not stall
+        m_iRunTicks = 0;
         if (pos == m_iLastPosBeforeUpdate) {
             // Position unchanged this tick
             if (++m_iSettleCount >= SETTLE_COUNT) {
@@ -102,23 +104,27 @@ void MotorCtrl::update() {
     }
     m_iSettleCount = 0;
 
+    // Running duration counter (never reset by position change)
+    if (m_iRunTicks < 65535) ++m_iRunTicks;
+
     // PID compute
-    int16_t iOutput = m_Pid.compute(iError, pos);
+    int16_t iOutput = m_Pid.compute(iError, pos, m_iRunTicks);
     uint16_t iSpeed = static_cast<uint16_t>(std::abs(iOutput));
 
     // Stepped speed cap: limit max CCR based on distance to target
     int32_t iAbsErr = std::abs(iError);
     uint16_t iSpeedCap;
     if      (iAbsErr > SPEED_CAP_TIER1) iSpeedCap = MAX_SPEED;
-    else if (iAbsErr > SPEED_CAP_TIER2) iSpeedCap = 720;
-    else if (iAbsErr > SPEED_CAP_TIER3) iSpeedCap = 360;
-    else                                 iSpeedCap = MIN_SPEED;
+    else if (iAbsErr > SPEED_CAP_TIER2) iSpeedCap = 480;
+    else if (iAbsErr > SPEED_CAP_TIER3) iSpeedCap = 240;
+    else                                 iSpeedCap = MIN_SPEED_TIER2;
     if (iSpeed > iSpeedCap) iSpeed = iSpeedCap;
 
-    // Clamp to MIN_SPEED to overcome friction
-    if (iSpeed < MIN_SPEED) {
-        iSpeed = MIN_SPEED;
-    }
+    // Dynamic MIN_SPEED: escalate based on running duration
+    uint16_t iMinSpeed = MIN_SPEED;
+    if      (m_iRunTicks >= STUCK_TIER2_TICKS) iMinSpeed = MIN_SPEED_TIER2;
+    else if (m_iRunTicks >= STUCK_TIER1_TICKS) iMinSpeed = MIN_SPEED_TIER1;
+    if (iSpeed < iMinSpeed) iSpeed = iMinSpeed;
 
     m_eDirection = (iOutput >= 0) ? DIRECTION_E::FORWARD : DIRECTION_E::REVERSE;
     set_pwm(m_eDirection, iSpeed);
