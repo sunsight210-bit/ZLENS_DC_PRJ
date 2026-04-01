@@ -420,23 +420,23 @@ void HAL_TIM_Base_MspDeInit(TIM_HandleTypeDef* htim_base)
   */
 void HAL_TIM_Encoder_MspDeInit(TIM_HandleTypeDef* htim_encoder)
 {
-  if(htim_encoder->Instance==TIM8)
+  if(htim_encoder->Instance==TIM4)
   {
-    /* USER CODE BEGIN TIM8_MspDeInit 0 */
+    /* USER CODE BEGIN TIM4_MspDeInit 0 */
 
-    /* USER CODE END TIM8_MspDeInit 0 */
+    /* USER CODE END TIM4_MspDeInit 0 */
     /* Peripheral clock disable */
-    __HAL_RCC_TIM8_CLK_DISABLE();
+    __HAL_RCC_TIM4_CLK_DISABLE();
 
-    /**TIM8 GPIO Configuration
-    PC6     ------> TIM8_CH1
-    PC7     ------> TIM8_CH2
+    /**TIM4 GPIO Configuration
+    PB6     ------> TIM4_CH1 (AS5311_A)
+    PB7     ------> TIM4_CH2 (AS5311_B)
     */
-    HAL_GPIO_DeInit(GPIOC, ENCODER_A_Pin|ENCODER_B_Pin);
+    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_6|GPIO_PIN_7);
 
-    /* USER CODE BEGIN TIM8_MspDeInit 1 */
+    /* USER CODE BEGIN TIM4_MspDeInit 1 */
 
-    /* USER CODE END TIM8_MspDeInit 1 */
+    /* USER CODE END TIM4_MspDeInit 1 */
   }
 
 }

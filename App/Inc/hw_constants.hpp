@@ -10,7 +10,7 @@ static constexpr uint16_t ADC_RESOLUTION      = 4095;   // 12-bit max
 static constexpr uint16_t DAC_RESOLUTION      = 4095;   // 12-bit max
 static constexpr uint16_t VREF_MV             = 3300;   // 参考电压 3.3V
 
-// --- Encoder (TIM8, 16-bit) ---
+// --- Encoder (TIM4, 16-bit, AS5311 on PB6/PB7) ---
 static constexpr uint32_t TIMER_PERIOD        = 65536;  // 2^16
 
 // --- FRAM SPI Commands ---
