@@ -3,7 +3,7 @@
 #include "zoom_table.hpp"
 #include <cstdlib>
 
-#ifdef PID_TUNE_LOG
+#ifndef BUILD_TESTING
 void swo_printf(const char* fmt, ...);
 #endif
 
@@ -30,6 +30,9 @@ void MotorCtrl::move_to(int32_t target) {
     m_iNoMoveCount = 0;
     m_iRunTicks = 0;
     m_iSettleCount = 0;
+    m_iLastErrorSign = 0;
+    m_iSignFlipCount = 0;
+    m_iSignCheckWindow = 0;
 
     int32_t pos = m_pEncoder->get_position();
     m_Pid.reset(pos);
@@ -84,7 +87,7 @@ void MotorCtrl::update() {
     m_iLastPos = pos;
 
     // Deadzone check: brake and wait for settle before going IDLE
-    // Motor may coast/rebound after brake, so require SETTLE_COUNT
+    // Motor may rebound after brake, so require SETTLE_COUNT
     // consecutive ticks within DEADZONE with no position change
     if (std::abs(iError) <= DEADZONE) {
         brake();
@@ -104,27 +107,61 @@ void MotorCtrl::update() {
     }
     m_iSettleCount = 0;
 
-    // Running duration counter (never reset by position change)
-    if (m_iRunTicks < 65535) ++m_iRunTicks;
+    // Stuck duration counter: increment when not moving, reset when moving
+    if (pos == m_iLastPosBeforeUpdate) {
+        if (m_iRunTicks < 65535) ++m_iRunTicks;
+    } else {
+        m_iRunTicks = 0;
+    }
 
     // PID compute
-    int16_t iOutput = m_Pid.compute(iError, pos, m_iRunTicks);
+    int16_t iOutput = m_Pid.compute(iError, pos);
     uint16_t iSpeed = static_cast<uint16_t>(std::abs(iOutput));
 
     // Stepped speed cap: limit max CCR based on distance to target
     int32_t iAbsErr = std::abs(iError);
     uint16_t iSpeedCap;
-    if      (iAbsErr > SPEED_CAP_TIER1) iSpeedCap = MAX_SPEED;
-    else if (iAbsErr > SPEED_CAP_TIER2) iSpeedCap = 480;
-    else if (iAbsErr > SPEED_CAP_TIER3) iSpeedCap = 240;
-    else                                 iSpeedCap = MIN_SPEED_TIER2;
+    if      (iAbsErr > SPEED_CAP_TIER1) iSpeedCap = MAX_SPEED;  // > 4000 → 1280
+    else if (iAbsErr > SPEED_CAP_TIER2) iSpeedCap = 480;        // > 1000 → 480
+    else                                 iSpeedCap = 300;        // ≤ 1000 → 300
     if (iSpeed > iSpeedCap) iSpeed = iSpeedCap;
 
-    // Dynamic MIN_SPEED: escalate based on running duration
-    uint16_t iMinSpeed = MIN_SPEED;
-    if      (m_iRunTicks >= STUCK_TIER2_TICKS) iMinSpeed = MIN_SPEED_TIER2;
-    else if (m_iRunTicks >= STUCK_TIER1_TICKS) iMinSpeed = MIN_SPEED_TIER1;
-    if (iSpeed < iMinSpeed) iSpeed = iMinSpeed;
+    // Error-proportional base MIN_SPEED (only outside deadband)
+    uint16_t iMinSpeed = 0;
+    if (iAbsErr > MIN_SPEED_DEADBAND) {
+        iMinSpeed = MIN_SPEED + static_cast<uint16_t>(
+            static_cast<uint32_t>(iAbsErr) * MIN_SPEED_RANGE / MIN_SPEED_ERR_SCALE);
+        if (iMinSpeed > MAX_STUCK_SPEED) iMinSpeed = MAX_STUCK_SPEED;
+    }
+
+    // Stuck ramp on top (when motor not moving, both zones)
+    uint16_t iSteps = m_iRunTicks / STUCK_RAMP_PERIOD;
+    for (uint16_t i = 0; i < iSteps; ++i) {
+        if (iMinSpeed < MIN_SPEED) iMinSpeed = MIN_SPEED;  // ramp floor
+        iMinSpeed = iMinSpeed * STUCK_RAMP_PCT / 100;
+        if (iMinSpeed >= MAX_STUCK_SPEED) { iMinSpeed = MAX_STUCK_SPEED; break; }
+    }
+    if (iSpeed < iMinSpeed) {
+        iSpeed = iMinSpeed;
+#ifndef BUILD_TESTING
+        if (m_iRunTicks % 500 == 0) {
+            swo_printf("[RAMP]rt=%u,min=%u,err=%ld\n",
+                       m_iRunTicks, iMinSpeed, static_cast<long>(iError));
+        }
+#endif
+    }
+
+    // Oscillation detection: reduce speed when error sign flips frequently
+    int8_t iSign = (iError > 0) ? 1 : -1;
+    if (iSign != m_iLastErrorSign && m_iLastErrorSign != 0)
+        m_iSignFlipCount++;
+    m_iLastErrorSign = iSign;
+    if (++m_iSignCheckWindow >= OSCILLATION_WINDOW) {
+        if (m_iSignFlipCount >= OSCILLATION_THRESHOLD)
+            iSpeed = iSpeed / 2;
+        m_iSignFlipCount = 0;
+        m_iSignCheckWindow = 0;
+    }
 
     m_eDirection = (iOutput >= 0) ? DIRECTION_E::FORWARD : DIRECTION_E::REVERSE;
     set_pwm(m_eDirection, iSpeed);

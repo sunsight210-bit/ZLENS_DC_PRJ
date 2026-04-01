@@ -132,6 +132,9 @@ void MotorTask::dispatch_command(const CMD_MESSAGE_S& stCmd) {
             ? StallDetect::Direction::FORWARD : StallDetect::Direction::REVERSE);
         m_pStall->start_motor();
         m_pMotor->move_to(iTarget);
+        m_iRetryTarget = iTarget;
+        m_iRetryCount = 0;
+        m_iMoveTimeout = 0;
         m_eTaskState = TASK_STATE_E::MOVING;
         break;
     }
@@ -172,6 +175,9 @@ void MotorTask::dispatch_command(const CMD_MESSAGE_S& stCmd) {
             ? StallDetect::Direction::FORWARD : StallDetect::Direction::REVERSE);
         m_pStall->start_motor();
         m_pMotor->move_to(iTarget);
+        m_iRetryTarget = iTarget;
+        m_iRetryCount = 0;
+        m_iMoveTimeout = 0;
         m_eTaskState = TASK_STATE_E::MOVING;
         break;
     }
@@ -190,6 +196,9 @@ void MotorTask::dispatch_command(const CMD_MESSAGE_S& stCmd) {
             ? StallDetect::Direction::FORWARD : StallDetect::Direction::REVERSE);
         m_pStall->start_motor();
         m_pMotor->move_to(iTarget);
+        m_iRetryTarget = iTarget;
+        m_iRetryCount = 0;
+        m_iMoveTimeout = 0;
         m_eTaskState = TASK_STATE_E::MOVING;
         break;
     }
@@ -277,11 +286,39 @@ void MotorTask::process_moving() {
         int32_t iPos = m_pEncoder->get_position();
         uint16_t iZoom = m_pZoom->get_nearest_zoom(iPos);
         m_pStall->reset();
+        m_iRetryCount = 0;
         send_response(rsp_cmd::ZOOM, iZoom);
         send_response(rsp_cmd::ARRIVED, rsp::ARRIVED_PARAM);
         send_save(save_reason::ARRIVED, 0, 0xFF);  // position_valid
         m_eTaskState = TASK_STATE_E::IDLE;
         m_pSm->transition_to(SYSTEM_STATE_E::READY);
+        return;
+    }
+
+    // Move timeout: if still running after MOVE_TIMEOUT_TICKS, retry or fail
+    if (++m_iMoveTimeout >= MOVE_TIMEOUT_TICKS) {
+        m_pMotor->stop();
+        m_pStall->reset();
+        if (m_iRetryCount < MAX_RETRY_COUNT) {
+            m_iRetryCount++;
+            m_iMoveTimeout = 0;
+#ifndef BUILD_TESTING
+            swo_printf("[RETRY] move timeout, retry %u/%u target=%ld\n",
+                       m_iRetryCount, MAX_RETRY_COUNT,
+                       static_cast<long>(m_iRetryTarget));
+#endif
+            m_pStall->start_motor();
+            m_pMotor->move_to(m_iRetryTarget);
+        } else {
+#ifndef BUILD_TESTING
+            swo_printf("[FAIL] move timeout, retries exhausted\n");
+#endif
+            m_iRetryCount = 0;
+            m_eTaskState = TASK_STATE_E::IDLE;
+            m_pSm->transition_to(SYSTEM_STATE_E::READY);
+            send_response(rsp_cmd::STALL_STOP, 0);
+            send_save(save_reason::STALL);
+        }
     }
 }
 
@@ -374,16 +411,29 @@ void MotorTask::handle_stall() {
 #endif
         break;
     default:
-        // Unexpected stall during normal operation
+        // Stall during normal operation — retry if attempts remain
         m_pMotor->emergency_stop();
         m_pStall->reset();
-        m_eTaskState = TASK_STATE_E::IDLE;
-        m_pSm->transition_to(SYSTEM_STATE_E::READY);
-        send_response(rsp_cmd::STALL_STOP, 0);
-        send_save(save_reason::STALL);
+        if (m_eTaskState == TASK_STATE_E::MOVING && m_iRetryCount < MAX_RETRY_COUNT) {
+            m_iRetryCount++;
+            m_iMoveTimeout = 0;
 #ifndef BUILD_TESTING
-        swo_printf("[FAIL] Unexpected stall during operation\n");
+            swo_printf("[RETRY] stall, retry %u/%u target=%ld\n",
+                       m_iRetryCount, MAX_RETRY_COUNT,
+                       static_cast<long>(m_iRetryTarget));
 #endif
+            m_pStall->start_motor();
+            m_pMotor->move_to(m_iRetryTarget);
+        } else {
+            m_iRetryCount = 0;
+            m_eTaskState = TASK_STATE_E::IDLE;
+            m_pSm->transition_to(SYSTEM_STATE_E::READY);
+            send_response(rsp_cmd::STALL_STOP, 0);
+            send_save(save_reason::STALL);
+#ifndef BUILD_TESTING
+            swo_printf("[FAIL] Stall during operation, retries exhausted\n");
+#endif
+        }
         break;
     }
 }

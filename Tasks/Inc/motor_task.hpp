@@ -40,6 +40,10 @@ public:
     // Settle detection
     static constexpr uint16_t SETTLE_STABLE_COUNT = 100;  // 100ms at 1ms/tick
 
+    // Move timeout & retry
+    static constexpr uint16_t MOVE_TIMEOUT_TICKS = 5000;  // 5s total timeout
+    static constexpr uint8_t  MAX_RETRY_COUNT = 2;
+
     void start_stall_current_test();
     void restore_speed(uint16_t iSpeedDuty, uint16_t iMinDuty, uint16_t iMaxDuty);
 
@@ -85,6 +89,11 @@ private:
     uint16_t m_iSettleCount = 0;
     int32_t m_iSettleLastPos = 0;
     bool m_bSettling = false;
+
+    // Move timeout & retry
+    uint16_t m_iMoveTimeout = 0;
+    uint8_t  m_iRetryCount = 0;
+    int32_t  m_iRetryTarget = 0;
 
     void reset_settle();
     bool is_settled();

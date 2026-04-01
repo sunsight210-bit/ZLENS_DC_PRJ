@@ -20,16 +20,20 @@ public:
     static constexpr uint16_t PWM_ARR = 4266;
     static constexpr uint16_t MAX_SPEED = 1280;
     static constexpr uint16_t MIN_SPEED = 128;
-    // Stuck-escalation tiers
-    static constexpr uint16_t MIN_SPEED_TIER1 = 192;   // after 500ms stuck
-    static constexpr uint16_t MIN_SPEED_TIER2 = 280;   // after 1000ms stuck
-    static constexpr uint16_t STUCK_TIER1_TICKS = 500;
-    static constexpr uint16_t STUCK_TIER2_TICKS = 1000;
+    // Error-proportional base + stuck ramp
+    static constexpr uint16_t MAX_STUCK_SPEED = 300;
+    static constexpr uint16_t MIN_SPEED_RANGE = MAX_STUCK_SPEED - MIN_SPEED;  // 172
+    static constexpr uint16_t MIN_SPEED_ERR_SCALE = 200;  // error=200 → cap
+    static constexpr int32_t  MIN_SPEED_DEADBAND = 32;    // error≤32: no base, PID controls
+    static constexpr uint16_t STUCK_RAMP_PERIOD = 50;   // check every 50ms
+    static constexpr uint16_t STUCK_RAMP_PCT = 110;     // +10% per step
     static constexpr int32_t  DEADZONE = 1;
     // Speed cap tiers (stepped speed limiting)
     static constexpr int32_t  SPEED_CAP_TIER1 = 4000;
     static constexpr int32_t  SPEED_CAP_TIER2 = 1000;
-    static constexpr int32_t  SPEED_CAP_TIER3 = 512;
+    // Oscillation detection
+    static constexpr uint8_t  OSCILLATION_WINDOW = 20;     // 20ms window
+    static constexpr uint8_t  OSCILLATION_THRESHOLD = 4;   // 4 sign flips = oscillation
     static constexpr int32_t  SAFE_LIMIT_MIN = 64;     // = HOME_OFFSET / 2
     static constexpr uint16_t ENCODER_TIMEOUT_TICKS = 2000; // 2000ms, allow integral to accumulate
     static constexpr uint16_t SETTLE_COUNT = 100;      // 100ms brake settle before IDLE
@@ -73,8 +77,12 @@ private:
     int32_t m_iLastPos = 0;
     int32_t m_iLastPosBeforeUpdate = 0;
     uint16_t m_iNoMoveCount = 0;
-    uint16_t m_iRunTicks = 0;       // RUNNING duration, never reset by position change
+    uint16_t m_iRunTicks = 0;       // stuck duration, only increments when position unchanged
     uint16_t m_iSettleCount = 0;
+    // Oscillation detection
+    int8_t m_iLastErrorSign = 0;
+    uint8_t m_iSignFlipCount = 0;
+    uint8_t m_iSignCheckWindow = 0;
 
     void set_pwm(DIRECTION_E dir, uint16_t speed);
     void brake();
