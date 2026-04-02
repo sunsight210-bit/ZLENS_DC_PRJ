@@ -57,6 +57,7 @@ typedef struct { volatile uint32_t dummy; } IWDG_TypeDef;
 typedef struct { IWDG_TypeDef *Instance; } IWDG_HandleTypeDef;
 
 // --- FLASH ---
+#define FLASH_TYPEPROGRAM_HALFWORD  0x01U
 typedef enum { FLASH_TYPEERASE_PAGES = 0 } FLASH_TypeEraseTypeDef;
 typedef struct {
     FLASH_TypeEraseTypeDef TypeErase;
@@ -66,6 +67,7 @@ typedef struct {
 
 // --- Extern peripherals (defined in mock_hal.cpp) ---
 extern TIM_TypeDef mock_TIM3_instance;
+extern TIM_TypeDef mock_TIM4_instance;
 extern TIM_TypeDef mock_TIM8_instance;
 extern SPI_TypeDef mock_SPI2_instance;
 extern GPIO_TypeDef mock_GPIOB_instance;
@@ -75,10 +77,15 @@ extern DAC_TypeDef mock_DAC_instance;
 extern IWDG_TypeDef mock_IWDG_instance;
 
 #define TIM3  (&mock_TIM3_instance)
+#define TIM4  (&mock_TIM4_instance)
 #define TIM8  (&mock_TIM8_instance)
 #define SPI2  (&mock_SPI2_instance)
 #define GPIOB (&mock_GPIOB_instance)
 #define GPIOA (&mock_GPIOA_instance)
 #define ADC1  (&mock_ADC1_instance)
 #define DAC1  (&mock_DAC_instance)
+
+#define DAC_CHANNEL_1       0x00000000U
+#define DAC_CHANNEL_2       0x00000010U
+#define DAC_ALIGN_12B_R     0x00000000U
 #define IWDG  (&mock_IWDG_instance)

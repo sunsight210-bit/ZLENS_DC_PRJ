@@ -1,19 +1,192 @@
 // App/Src/motor_ctrl.cpp
 #include "motor_ctrl.hpp"
+#include "zoom_table.hpp"
 #include <cstdlib>
 
+#ifndef BUILD_TESTING
+void swo_printf(const char* fmt, ...);
+#endif
+
 namespace zlens {
+
+static_assert(MotorCtrl::SAFE_LIMIT_MIN == ZoomTable::HOME_OFFSET / 2,
+              "SAFE_LIMIT_MIN must be HOME_OFFSET / 2");
 
 void MotorCtrl::init(TIM_HandleTypeDef* htim, DAC_HandleTypeDef* hdac, Encoder* encoder) {
     m_pHtim = htim;
     m_pHdac = hdac;
     m_pEncoder = encoder;
     m_eState = MOTOR_STATE_E::IDLE;
-    m_iCurrentSpeed = 0;
+    m_iTarget = 0;
+    m_iNoMoveCount = 0;
+    m_Pid.reset(0);
     coast();
 }
 
+void MotorCtrl::move_to(int32_t target) {
+    if (target < SAFE_LIMIT_MIN) target = SAFE_LIMIT_MIN;
+    if (target > m_iSafeLimitMax) target = m_iSafeLimitMax;
+
+    m_iNoMoveCount = 0;
+    m_iRunTicks = 0;
+    m_iSettleCount = 0;
+    m_iLastErrorSign = 0;
+    m_iSignFlipCount = 0;
+    m_iSignCheckWindow = 0;
+
+    int32_t pos = m_pEncoder->get_position();
+    m_Pid.reset(pos);
+    m_iLastPos = pos;
+
+    if (std::abs(target - pos) <= DEADZONE) {
+        m_eState = MOTOR_STATE_E::IDLE;
+        return;
+    }
+
+    m_iTarget = target;
+    m_eState = MOTOR_STATE_E::RUNNING;
+}
+
+void MotorCtrl::stop() {
+    brake();
+    m_Pid.reset(m_pEncoder ? m_pEncoder->get_position() : 0);
+    m_eState = MOTOR_STATE_E::IDLE;
+}
+
+void MotorCtrl::emergency_stop() {
+    brake();
+    m_Pid.reset(0);
+    m_iNoMoveCount = 0;
+    m_eState = MOTOR_STATE_E::IDLE;
+}
+
+void MotorCtrl::update() {
+    if (m_eState != MOTOR_STATE_E::RUNNING) return;
+
+    int32_t pos = m_pEncoder->get_position();
+    m_iLastPosBeforeUpdate = m_iLastPos;  // snapshot for settle detection
+    int32_t iError = m_iTarget - pos;
+
+    // Safety limits
+    if (pos <= SAFE_LIMIT_MIN && iError < 0) {
+        brake(); m_Pid.reset(pos); m_eState = MOTOR_STATE_E::IDLE; return;
+    }
+    if (pos >= m_iSafeLimitMax && iError > 0) {
+        brake(); m_Pid.reset(pos); m_eState = MOTOR_STATE_E::IDLE; return;
+    }
+
+    // Encoder timeout (stall detection)
+    if (pos == m_iLastPos) {
+        if (++m_iNoMoveCount >= ENCODER_TIMEOUT_TICKS) {
+            brake(); m_Pid.reset(pos); m_iNoMoveCount = 0;
+            m_eState = MOTOR_STATE_E::STALLED; return;
+        }
+    } else {
+        m_iNoMoveCount = 0;
+    }
+    m_iLastPos = pos;
+
+    // Deadzone check: brake and wait for settle before going IDLE
+    // Motor may rebound after brake, so require SETTLE_COUNT
+    // consecutive ticks within DEADZONE with no position change
+    if (std::abs(iError) <= DEADZONE) {
+        brake();
+        m_iNoMoveCount = 0;  // settle period: no-move is expected, not stall
+        m_iRunTicks = 0;
+        if (pos == m_iLastPosBeforeUpdate) {
+            // Position unchanged this tick
+            if (++m_iSettleCount >= SETTLE_COUNT) {
+                m_Pid.reset(pos);
+                m_iSettleCount = 0;
+                m_eState = MOTOR_STATE_E::IDLE;
+            }
+        } else {
+            m_iSettleCount = 0;  // still moving, reset settle counter
+        }
+        return;
+    }
+    m_iSettleCount = 0;
+
+    // Stuck duration counter: increment when not moving, reset when moving
+    if (pos == m_iLastPosBeforeUpdate) {
+        if (m_iRunTicks < 65535) ++m_iRunTicks;
+    } else {
+        m_iRunTicks = 0;
+    }
+
+    // PID compute
+    int16_t iOutput = m_Pid.compute(iError, pos);
+    uint16_t iSpeed = static_cast<uint16_t>(std::abs(iOutput));
+
+    // Stepped speed cap: limit max CCR based on distance to target
+    int32_t iAbsErr = std::abs(iError);
+    uint16_t iSpeedCap;
+    if      (iAbsErr > SPEED_CAP_TIER1) iSpeedCap = MAX_SPEED;  // > 4000 → 1280
+    else if (iAbsErr > SPEED_CAP_TIER2) iSpeedCap = 480;        // > 1000 → 480
+    else                                 iSpeedCap = 300;        // ≤ 1000 → 300
+    if (iSpeed > iSpeedCap) iSpeed = iSpeedCap;
+
+    // Error-proportional base MIN_SPEED (only outside deadband)
+    uint16_t iMinSpeed = 0;
+    if (iAbsErr > MIN_SPEED_DEADBAND) {
+        iMinSpeed = MIN_SPEED + static_cast<uint16_t>(
+            static_cast<uint32_t>(iAbsErr) * MIN_SPEED_RANGE / MIN_SPEED_ERR_SCALE);
+        if (iMinSpeed > MAX_STUCK_SPEED) iMinSpeed = MAX_STUCK_SPEED;
+    }
+
+    // Stuck ramp on top (when motor not moving, both zones)
+    uint16_t iSteps = m_iRunTicks / STUCK_RAMP_PERIOD;
+    for (uint16_t i = 0; i < iSteps; ++i) {
+        if (iMinSpeed < MIN_SPEED) iMinSpeed = MIN_SPEED;  // ramp floor
+        iMinSpeed = iMinSpeed * STUCK_RAMP_PCT / 100;
+        if (iMinSpeed >= MAX_STUCK_SPEED) { iMinSpeed = MAX_STUCK_SPEED; break; }
+    }
+    if (iSpeed < iMinSpeed) {
+        iSpeed = iMinSpeed;
+#ifndef BUILD_TESTING
+        if (m_iRunTicks % 500 == 0) {
+            swo_printf("[RAMP]rt=%u,min=%u,err=%ld\n",
+                       m_iRunTicks, iMinSpeed, static_cast<long>(iError));
+        }
+#endif
+    }
+
+    // Oscillation detection: reduce speed when error sign flips frequently
+    int8_t iSign = (iError > 0) ? 1 : -1;
+    if (iSign != m_iLastErrorSign && m_iLastErrorSign != 0)
+        m_iSignFlipCount++;
+    m_iLastErrorSign = iSign;
+    if (++m_iSignCheckWindow >= OSCILLATION_WINDOW) {
+        if (m_iSignFlipCount >= OSCILLATION_THRESHOLD)
+            iSpeed = iSpeed / 2;
+        m_iSignFlipCount = 0;
+        m_iSignCheckWindow = 0;
+    }
+
+    m_eDirection = (iOutput >= 0) ? DIRECTION_E::FORWARD : DIRECTION_E::REVERSE;
+    set_pwm(m_eDirection, iSpeed);
+
+    // Drift detection (no interruption, log only)
+    if (m_pEncoder->is_drift_detected()) {
+#ifdef PID_TUNE_LOG
+        swo_printf("[DRIFT]%ld\n", static_cast<int32_t>(m_pEncoder->get_drift_error()));
+#endif
+    }
+
+#ifdef PID_TUNE_LOG
+    swo_printf("[PID]%lu,%ld,%ld,%ld,%d\n",
+               HAL_GetTick(), m_iTarget, pos, iError, iOutput);
+#endif
+}
+
+void MotorCtrl::set_vref_mv(uint16_t mv) {
+    if (!m_pHdac) return;
+    uint32_t dac_val = static_cast<uint32_t>(mv) * 4095 / 3300;
+    HAL_DAC_SetValue(m_pHdac, DAC_CHANNEL_2, DAC_ALIGN_12B_R, dac_val);
+}
+
 void MotorCtrl::set_pwm(DIRECTION_E dir, uint16_t speed) {
+    if (!m_pHtim) return;
     if (dir == DIRECTION_E::FORWARD) {
         m_pHtim->Instance->CCR1 = speed;
         m_pHtim->Instance->CCR2 = 0;
@@ -24,105 +197,15 @@ void MotorCtrl::set_pwm(DIRECTION_E dir, uint16_t speed) {
 }
 
 void MotorCtrl::brake() {
+    if (!m_pHtim) return;
     m_pHtim->Instance->CCR1 = PWM_ARR;
     m_pHtim->Instance->CCR2 = PWM_ARR;
 }
 
 void MotorCtrl::coast() {
+    if (!m_pHtim) return;
     m_pHtim->Instance->CCR1 = 0;
     m_pHtim->Instance->CCR2 = 0;
-}
-
-void MotorCtrl::move_to(int32_t target) {
-    m_iTarget = target;
-    int32_t pos = m_pEncoder->get_position();
-    int32_t diff = target - pos;
-
-    if (std::abs(diff) <= DEADZONE) {
-        m_eState = MOTOR_STATE_E::IDLE;
-        return;
-    }
-
-    m_eDirection = (diff > 0) ? DIRECTION_E::FORWARD : DIRECTION_E::REVERSE;
-    m_iCurrentSpeed = m_iMinSpeed;
-    m_eState = MOTOR_STATE_E::ACCELERATING;
-    set_pwm(m_eDirection, m_iCurrentSpeed);
-}
-
-void MotorCtrl::stop() {
-    if (m_eState == MOTOR_STATE_E::IDLE) return;
-    m_eState = MOTOR_STATE_E::DECELERATING;
-}
-
-void MotorCtrl::emergency_stop() {
-    brake();
-    m_iCurrentSpeed = 0;
-    m_eState = MOTOR_STATE_E::IDLE;
-}
-
-void MotorCtrl::set_current_limit(uint16_t milliamps) {
-    // I_max = VREF / 2 => VREF = I_max * 2
-    // DAC 12-bit: 0-4095 maps to 0-3.3V
-    uint32_t vref_mv = milliamps * 2; // mV
-    uint32_t dac_val = vref_mv * 4095 / 3300;
-    if (dac_val > 4095) dac_val = 4095;
-    HAL_DAC_SetValue(m_pHdac, 2, 0, dac_val);
-}
-
-void MotorCtrl::update() {
-    if (m_eState == MOTOR_STATE_E::IDLE || m_eState == MOTOR_STATE_E::STALLED) return;
-
-    int32_t pos = m_pEncoder->get_position();
-    int32_t diff = m_iTarget - pos;
-    int32_t remaining = std::abs(diff);
-
-    // Check arrival or overshoot (passed target beyond DEADZONE)
-    bool bOvershot = (m_eDirection == DIRECTION_E::FORWARD && diff < -DEADZONE) ||
-                     (m_eDirection == DIRECTION_E::REVERSE && diff > DEADZONE);
-    if (remaining <= DEADZONE || bOvershot) {
-        brake();
-        m_iCurrentSpeed = 0;
-        m_eState = MOTOR_STATE_E::IDLE;
-        return;
-    }
-
-    switch (m_eState) {
-    case MOTOR_STATE_E::ACCELERATING:
-        if (m_iCurrentSpeed < m_iMaxSpeed) {
-            m_iCurrentSpeed += ACCEL_STEP;
-            if (m_iCurrentSpeed > m_iMaxSpeed) m_iCurrentSpeed = m_iMaxSpeed;
-        } else {
-            m_eState = MOTOR_STATE_E::CONSTANT;
-        }
-        if (remaining < DECEL_DISTANCE) {
-            m_eState = MOTOR_STATE_E::DECELERATING;
-        }
-        break;
-
-    case MOTOR_STATE_E::CONSTANT:
-        if (remaining < DECEL_DISTANCE) {
-            m_eState = MOTOR_STATE_E::DECELERATING;
-        }
-        break;
-
-    case MOTOR_STATE_E::DECELERATING:
-        if (m_iCurrentSpeed > m_iMinSpeed) {
-            m_iCurrentSpeed -= ACCEL_STEP;
-            if (m_iCurrentSpeed < m_iMinSpeed) m_iCurrentSpeed = m_iMinSpeed;
-        }
-        break;
-
-    case MOTOR_STATE_E::BRAKING:
-        brake();
-        m_iCurrentSpeed = 0;
-        m_eState = MOTOR_STATE_E::IDLE;
-        return;
-
-    default:
-        break;
-    }
-
-    set_pwm(m_eDirection, m_iCurrentSpeed);
 }
 
 } // namespace zlens

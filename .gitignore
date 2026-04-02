@@ -8,3 +8,6 @@ build*/
 *.map
 Test/logs/
 Debug/
+*.pdf
+*.PDF
+*.docx

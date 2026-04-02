@@ -52,7 +52,7 @@ namespace {
 
 constexpr uint32_t BASELINE_SAMPLES    = 20;
 constexpr uint32_t BASELINE_INTERVAL   = 100;  // ms between baseline samples
-constexpr uint16_t SPEEDS[]            = {1200, 2400, 3600};
+constexpr uint16_t SPEEDS[]            = {800, 1600, 3200};
 constexpr uint32_t SPEED_COUNT         = sizeof(SPEEDS) / sizeof(SPEEDS[0]);
 constexpr int32_t  HOMING_FAR          = 1000000;
 constexpr int32_t  HOMING_RETRACT      = 4096;

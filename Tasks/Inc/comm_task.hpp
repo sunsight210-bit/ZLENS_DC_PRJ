@@ -25,6 +25,12 @@ public:
     uint16_t get_current_zoom() const { return m_iCurrentZoom; }
     void set_current_zoom(uint16_t zoom) { m_iCurrentZoom = zoom; }
 
+    uint16_t get_speed_duty() const { return m_iSpeedDuty; }
+    void set_speed_duty(uint16_t iDuty) { m_iSpeedDuty = iDuty; }
+
+    uint16_t get_stall_count() const { return m_iStallCount; }
+    void set_stall_count(uint16_t cnt) { m_iStallCount = cnt; }
+
 private:
     CommProtocol* m_pComm = nullptr;
     SystemManager* m_pSm = nullptr;
@@ -35,6 +41,8 @@ private:
     QueueHandle_t m_rspQueue = nullptr;
 
     uint16_t m_iCurrentZoom = 60; // default 6.0x (0.6x = 6, 60x = 600)
+    uint16_t m_iSpeedDuty = rsp::DEFAULT_SPEED_DUTY;
+    uint16_t m_iStallCount = 0;
 
     void dispatch_work_command(uint8_t cmd, uint16_t param);
     void dispatch_factory_command(uint8_t cmd, uint16_t paramH, uint16_t paramL);

@@ -75,6 +75,8 @@ void Error_Handler(void);
 #define FRAM_WP_GPIO_Port GPIOB
 #define FRAM_CS_Pin GPIO_PIN_12
 #define FRAM_CS_GPIO_Port GPIOB
+/* NOTE: ENCODER_A/B on PC6/PC7 are legacy (old TIM8 config).
+   Actual encoder now uses TIM4 on PB6/PB7, configured directly in MspInit. */
 #define ENCODER_A_Pin GPIO_PIN_6
 #define ENCODER_A_GPIO_Port GPIOC
 #define ENCODER_B_Pin GPIO_PIN_7
