@@ -4,4 +4,5 @@
 
 namespace zlens {
 uint16_t crc16_modbus(const uint8_t* data, uint16_t length);
+uint16_t crc16_modbus(const uint8_t* data, uint16_t length, uint16_t init);
 } // namespace zlens

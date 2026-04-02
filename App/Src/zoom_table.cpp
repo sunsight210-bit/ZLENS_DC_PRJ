@@ -137,10 +137,10 @@ bool ZoomTable::save_to_flash() {
         addr += hw::FLASH_HALFWORD_SIZE;
     }
 
-    // CRC over count(2B) + entries
+    // CRC over count(2B) + entries (chained)
     uint16_t crc = crc16_modbus(reinterpret_cast<const uint8_t*>(&m_iCount), sizeof(m_iCount));
     for (uint16_t i = 0; i < m_iCount; ++i) {
-        crc = crc16_modbus(reinterpret_cast<const uint8_t*>(&m_aEntries[i]), sizeof(ZOOM_ENTRY_S));
+        crc = crc16_modbus(reinterpret_cast<const uint8_t*>(&m_aEntries[i]), sizeof(ZOOM_ENTRY_S), crc);
     }
     HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, addr, crc);
 
@@ -163,6 +163,14 @@ bool ZoomTable::load_from_flash() {
         m_aEntries[i].angle_x100 = log.flash_memory[offset] | (log.flash_memory[offset+1] << 8);
         offset += hw::FLASH_HALFWORD_SIZE;
     }
+
+    // Verify CRC
+    uint16_t crc_stored = log.flash_memory[offset] | (log.flash_memory[offset+1] << 8);
+    uint16_t crc_calc = crc16_modbus(reinterpret_cast<const uint8_t*>(&m_iCount), sizeof(m_iCount));
+    for (uint16_t i = 0; i < m_iCount; ++i) {
+        crc_calc = crc16_modbus(reinterpret_cast<const uint8_t*>(&m_aEntries[i]), sizeof(ZOOM_ENTRY_S), crc_calc);
+    }
+    if (crc_calc != crc_stored) { m_iCount = 0; return false; }
     return true;
 #else
     // Real Flash read implementation
@@ -179,6 +187,18 @@ bool ZoomTable::load_from_flash() {
         offset += hw::FLASH_HALFWORD_SIZE;
         m_aEntries[i].angle_x100 = flash_ptr[offset] | (flash_ptr[offset+1] << 8);
         offset += hw::FLASH_HALFWORD_SIZE;
+    }
+
+    // Verify CRC
+    uint16_t crc_stored = flash_ptr[offset] | (flash_ptr[offset+1] << 8);
+    uint16_t crc_calc = crc16_modbus(reinterpret_cast<const uint8_t*>(&m_iCount), sizeof(m_iCount));
+    for (uint16_t i = 0; i < m_iCount; ++i) {
+        crc_calc = crc16_modbus(reinterpret_cast<const uint8_t*>(&m_aEntries[i]), sizeof(ZOOM_ENTRY_S), crc_calc);
+    }
+    if (crc_calc != crc_stored) {
+        swo_printf("[ZOOM] CRC mismatch: stored=0x%04X calc=0x%04X\n", crc_stored, crc_calc);
+        m_iCount = 0;
+        return false;
     }
     return true;
 #endif
