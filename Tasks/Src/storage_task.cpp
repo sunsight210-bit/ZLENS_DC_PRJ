@@ -11,65 +11,45 @@ void StorageTask::init(FramStorage* pFram, QueueHandle_t saveQ) {
     m_saveQueue = saveQ;
     m_iLastSaveTick = HAL_GetTick();
     m_iLastSavedPosition = 0;
-    m_bParamsLoaded = false;
-    m_stParams = {};
+    m_bStateLoaded = false;
+    m_stState = {};
 }
 
 void StorageTask::run_once() {
-    // Check save queue (non-blocking)
     SAVE_MESSAGE_S stMsg;
     if (xQueueReceive(m_saveQueue, &stMsg, 0) == pdTRUE) {
         handle_save(stMsg);
     }
-
-    // Periodic save check
     do_periodic_save();
 }
 
-bool StorageTask::restore_params(FRAM_PARAMS_S& stParams) {
-    if (!m_pFram->load_params(m_stParams)) {
+bool StorageTask::restore_state(FRAM_STATE_S& stState) {
+    if (!m_pFram->load_state(m_stState)) {
         return false;
     }
-    if (!FramStorage::verify_crc(m_stParams) || !FramStorage::check_magic(m_stParams)) {
-        return false;
-    }
-    stParams = m_stParams;
-    m_iLastSavedPosition = m_stParams.current_position;
-    m_bParamsLoaded = true;
+    stState = m_stState;
+    m_iLastSavedPosition = m_stState.current_position;
+    m_bStateLoaded = true;
     return true;
 }
 
 void StorageTask::handle_save(const SAVE_MESSAGE_S& stMsg) {
     if (g_bSpiEmergency) return;
 
-    m_stParams.current_position = stMsg.position;
-    m_stParams.current_zoom_x10 = stMsg.zoom_x10;
-    m_stParams.last_save_reason = stMsg.reason;
+    m_stState.current_position = stMsg.position;
+    m_stState.current_zoom_x10 = stMsg.zoom_x10;
+    m_stState.last_save_reason = stMsg.reason;
 
-    // Update backlash if calibrated
-    if (stMsg.backlash_valid == 0xFF) {
-        m_stParams.backlash_counts = stMsg.backlash_counts;
-        m_stParams.backlash_valid = 0xFF;
-    }
-
-    // Update homing/position status
     if (stMsg.homing_done == 1) {
-        m_stParams.homing_done = 1;
-        m_stParams.move_count = 0;  // reset counter after homing
+        m_stState.homing_done = 1;
+        m_stState.move_count = 0;
     }
     if (stMsg.position_valid == 0xFF) {
-        m_stParams.position_valid = 0xFF;
-        m_stParams.move_count++;
+        m_stState.position_valid = 0xFF;
+        m_stState.move_count++;
     }
 
-    // Update speed settings if valid
-    if (stMsg.speed_valid == 1) {
-        m_stParams.speed_duty     = stMsg.speed_duty;
-        m_stParams.min_speed_duty = stMsg.min_speed_duty;
-        m_stParams.max_speed_duty = stMsg.max_speed_duty;
-    }
-
-    write_params();
+    write_state();
     m_iLastSavedPosition = stMsg.position;
     m_iLastSaveTick = HAL_GetTick();
 }
@@ -79,20 +59,18 @@ void StorageTask::do_periodic_save() {
     if (iTick - m_iLastSaveTick < PERIODIC_SAVE_INTERVAL_MS) return;
     if (g_bSpiEmergency) return;
 
-    // Only save if position changed
-    if (m_stParams.current_position != m_iLastSavedPosition) {
-        m_stParams.last_save_reason = save_reason::PERIODIC;
-        write_params();
-        m_iLastSavedPosition = m_stParams.current_position;
+    if (m_stState.current_position != m_iLastSavedPosition) {
+        m_stState.last_save_reason = save_reason::PERIODIC;
+        write_state();
+        m_iLastSavedPosition = m_stState.current_position;
     }
     m_iLastSaveTick = iTick;
 }
 
-void StorageTask::write_params() {
-    m_stParams.magic_number = FramStorage::MAGIC;
-    m_stParams.version = 3;
-    m_stParams.crc16 = FramStorage::calc_crc(m_stParams);
-    m_pFram->save_params(m_stParams);
+void StorageTask::write_state() {
+    m_stState.magic = FramStorage::MAGIC;
+    m_stState.crc16 = FramStorage::calc_crc(m_stState);
+    m_pFram->save_state(m_stState);
 }
 
 } // namespace zlens
@@ -105,11 +83,10 @@ extern "C" void storage_task_entry(void* params) {
     static StorageTask task;
     task.init(&g_FramStorage, g_saveQueue);
 
-    // Restore saved parameters on boot
-    FRAM_PARAMS_S stParams;
-    if (task.restore_params(stParams)) {
-        g_Encoder.set_position(stParams.current_position);
-        // backlash no longer used (PID closed-loop)
+    // Restore saved state on boot
+    FRAM_STATE_S stState;
+    if (task.restore_state(stState)) {
+        g_Encoder.set_position(stState.current_position);
     }
 
     TickType_t xLastWake = xTaskGetTickCount();

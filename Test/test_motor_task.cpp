@@ -487,8 +487,7 @@ TEST_F(MotorTaskTest, HomingNoDiag_GoesToIdle) {
     EXPECT_EQ(task.get_state(), MotorTask::TASK_STATE_E::IDLE);
 }
 
-TEST_F(MotorTaskTest, SendSave_DefaultBacklashFieldsZero) {
-    // Normal move should not carry backlash data
+TEST_F(MotorTaskTest, SendSave_HasCorrectFields) {
     send_cmd(cmd::SET_ZOOM, 60);
     task.run_once();
 
@@ -498,8 +497,7 @@ TEST_F(MotorTaskTest, SendSave_DefaultBacklashFieldsZero) {
 
     SAVE_MESSAGE_S save;
     EXPECT_TRUE(receive_save(save));
-    EXPECT_EQ(save.backlash_counts, 0);
-    EXPECT_EQ(save.backlash_valid, 0);
+    EXPECT_EQ(save.reason, save_reason::ARRIVED);
 }
 
 // ============================================================
@@ -575,16 +573,14 @@ TEST_F(MotorTaskTest, SetSpeed_Clamps1500To1000ThenToMax) {
     EXPECT_EQ(rsp.param, 1000);
 }
 
-TEST_F(MotorTaskTest, SetSpeed_SavesSpeedToQueue) {
+TEST_F(MotorTaskTest, SetSpeed_RespondsWithNewDuty) {
     send_cmd(cmd::SET_SPEED, 200);
     task.run_once();
 
-    SAVE_MESSAGE_S save;
-    EXPECT_TRUE(receive_save(save));
-    EXPECT_EQ(save.speed_valid, 1);
-    EXPECT_EQ(save.speed_duty, 200);
-    EXPECT_EQ(save.min_speed_duty, rsp::DEFAULT_MIN_SPEED_DUTY);
-    EXPECT_EQ(save.max_speed_duty, rsp::DEFAULT_MAX_SPEED_DUTY);
+    RSP_MESSAGE_S rsp;
+    EXPECT_TRUE(receive_rsp(rsp));
+    EXPECT_EQ(rsp.cmd, rsp_cmd::SPEED);
+    EXPECT_EQ(rsp.param, 200);
 }
 
 TEST_F(MotorTaskTest, SpeedInc_IncrementsBy1) {
@@ -675,14 +671,14 @@ TEST_F(MotorTaskTest, SetMaxSpeed_LowersCurrentSpeed) {
     EXPECT_EQ(rsp.param, 200);
 }
 
-TEST_F(MotorTaskTest, SetMaxSpeed_SavesSpeedToQueue) {
+TEST_F(MotorTaskTest, SetMaxSpeed_RespondsWithNewMax) {
     send_cmd(cmd::SET_MAX_SPEED, 500);
     task.run_once();
 
-    SAVE_MESSAGE_S save;
-    EXPECT_TRUE(receive_save(save));
-    EXPECT_EQ(save.speed_valid, 1);
-    EXPECT_EQ(save.max_speed_duty, 500);
+    RSP_MESSAGE_S rsp;
+    EXPECT_TRUE(receive_rsp(rsp));
+    EXPECT_EQ(rsp.cmd, rsp_cmd::SPEED);
+    EXPECT_EQ(rsp.param, 500);
 }
 
 TEST_F(MotorTaskTest, SelfTest0x65_TriggersHoming) {

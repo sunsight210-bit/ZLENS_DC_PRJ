@@ -10,6 +10,7 @@
 #include "mock_hal.hpp"
 #else
 #include "stm32f1xx_hal.h"
+#include "swo_debug.hpp"
 #endif
 
 namespace zlens {
@@ -40,7 +41,7 @@ int32_t ZoomTable::angle_to_position(int32_t iAngle_x100) const {
 }
 
 int ZoomTable::find_index(uint16_t zoom_x10) const {
-    for (uint8_t i = 0; i < m_iCount; ++i) {
+    for (uint16_t i = 0; i < m_iCount; ++i) {
         if (m_aEntries[i].zoom_x10 == zoom_x10) return i;
     }
     return -1;
@@ -63,7 +64,7 @@ uint16_t ZoomTable::get_nearest_zoom(int32_t position) const {
     if (m_iCount == 0) return 0;
     uint16_t nearest = m_aEntries[0].zoom_x10;
     int32_t min_dist = std::abs(position - angle_to_position(m_aEntries[0].angle_x100));
-    for (uint8_t i = 1; i < m_iCount; ++i) {
+    for (uint16_t i = 1; i < m_iCount; ++i) {
         int32_t dist = std::abs(position - angle_to_position(m_aEntries[i].angle_x100));
         if (dist < min_dist) {
             min_dist = dist;
@@ -110,6 +111,9 @@ void ZoomTable::erase_all() {
 }
 
 bool ZoomTable::save_to_flash() {
+#ifndef BUILD_TESTING
+    swo_printf("[ZOOM] save_to_flash: %u entries\n", m_iCount);
+#endif
     HAL_FLASH_Unlock();
 
     FLASH_EraseInitTypeDef erase;
@@ -122,23 +126,23 @@ bool ZoomTable::save_to_flash() {
         return false;
     }
 
-    // Write: [count(1B padding to 2B)] + [entries as half-words] + [CRC16]
-    HAL_FLASH_Program(0, FLASH_ZOOM_ADDR, m_iCount);
+    // Write: [count(2B)] + [entries as half-words] + [CRC16]
+    HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, FLASH_ZOOM_ADDR, m_iCount);
 
     uint32_t addr = FLASH_ZOOM_ADDR + hw::FLASH_HALFWORD_SIZE;
-    for (uint8_t i = 0; i < m_iCount; ++i) {
-        HAL_FLASH_Program(0, addr, m_aEntries[i].zoom_x10);
+    for (uint16_t i = 0; i < m_iCount; ++i) {
+        HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, addr, m_aEntries[i].zoom_x10);
         addr += hw::FLASH_HALFWORD_SIZE;
-        HAL_FLASH_Program(0, addr, m_aEntries[i].angle_x100);
+        HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, addr, m_aEntries[i].angle_x100);
         addr += hw::FLASH_HALFWORD_SIZE;
     }
 
-    // CRC over count + entries
-    uint16_t crc = crc16_modbus(reinterpret_cast<const uint8_t*>(&m_iCount), 1);
-    for (uint8_t i = 0; i < m_iCount; ++i) {
+    // CRC over count(2B) + entries
+    uint16_t crc = crc16_modbus(reinterpret_cast<const uint8_t*>(&m_iCount), sizeof(m_iCount));
+    for (uint16_t i = 0; i < m_iCount; ++i) {
         crc = crc16_modbus(reinterpret_cast<const uint8_t*>(&m_aEntries[i]), sizeof(ZOOM_ENTRY_S));
     }
-    HAL_FLASH_Program(0, addr, crc);
+    HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, addr, crc);
 
     HAL_FLASH_Lock();
     return true;
@@ -147,13 +151,13 @@ bool ZoomTable::save_to_flash() {
 bool ZoomTable::load_from_flash() {
 #ifdef BUILD_TESTING
     auto& log = mock::get_log();
-    if (log.flash_memory.empty()) return false;
+    if (log.flash_memory.size() < 2) return false;
 
-    m_iCount = log.flash_memory[0];
+    m_iCount = log.flash_memory[0] | (log.flash_memory[1] << 8);
     if (m_iCount > MAX_ENTRIES) { m_iCount = 0; return false; }
 
     uint32_t offset = hw::FLASH_HALFWORD_SIZE;
-    for (uint8_t i = 0; i < m_iCount; ++i) {
+    for (uint16_t i = 0; i < m_iCount; ++i) {
         m_aEntries[i].zoom_x10 = log.flash_memory[offset] | (log.flash_memory[offset+1] << 8);
         offset += hw::FLASH_HALFWORD_SIZE;
         m_aEntries[i].angle_x100 = log.flash_memory[offset] | (log.flash_memory[offset+1] << 8);
@@ -163,11 +167,14 @@ bool ZoomTable::load_from_flash() {
 #else
     // Real Flash read implementation
     const uint8_t* flash_ptr = reinterpret_cast<const uint8_t*>(FLASH_ZOOM_ADDR);
-    m_iCount = flash_ptr[0];
+    uint16_t iRawCount = flash_ptr[0] | (flash_ptr[1] << 8);
+    swo_printf("[ZOOM] Flash @0x%08lX raw count=%u (0x%04X)\n",
+               (unsigned long)FLASH_ZOOM_ADDR, iRawCount, iRawCount);
+    m_iCount = iRawCount;
     if (m_iCount > MAX_ENTRIES) { m_iCount = 0; return false; }
 
     uint32_t offset = hw::FLASH_HALFWORD_SIZE;
-    for (uint8_t i = 0; i < m_iCount; ++i) {
+    for (uint16_t i = 0; i < m_iCount; ++i) {
         m_aEntries[i].zoom_x10 = flash_ptr[offset] | (flash_ptr[offset+1] << 8);
         offset += hw::FLASH_HALFWORD_SIZE;
         m_aEntries[i].angle_x100 = flash_ptr[offset] | (flash_ptr[offset+1] << 8);

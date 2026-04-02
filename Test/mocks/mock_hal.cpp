@@ -4,6 +4,7 @@
 
 // Peripheral instances
 TIM_TypeDef mock_TIM3_instance = {};
+TIM_TypeDef mock_TIM4_instance = {};
 TIM_TypeDef mock_TIM8_instance = {};
 SPI_TypeDef mock_SPI2_instance = {};
 GPIO_TypeDef mock_GPIOB_instance = {};
@@ -30,6 +31,7 @@ void HalCallLog::reset() {
     tick = 0;
     tick_auto_increment = true;
     mock_TIM3_instance = {};
+    mock_TIM4_instance = {};
     mock_TIM8_instance = {};
     mock_SPI2_instance = {};
 }

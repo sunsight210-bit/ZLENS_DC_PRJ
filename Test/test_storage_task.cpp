@@ -31,7 +31,7 @@ protected:
     }
 
     void send_save(int32_t pos, uint16_t zoom, uint8_t reason) {
-        SAVE_MESSAGE_S msg = {pos, zoom, reason};
+        SAVE_MESSAGE_S msg = {pos, zoom, reason, 0, 0};
         xQueueSend(saveQ, &msg, 0);
     }
 };
@@ -40,10 +40,9 @@ TEST_F(StorageTaskTest, ReceiveSave_Arrived_CallsFram) {
     send_save(10000, 60, save_reason::ARRIVED);
     task.run_once();
 
-    // FRAM should have been written (SPI TX called)
     EXPECT_GT(mock::get_log().spi_tx_data.size(), 0u);
-    EXPECT_EQ(task.get_params().current_position, 10000);
-    EXPECT_EQ(task.get_params().current_zoom_x10, 60);
+    EXPECT_EQ(task.get_state().current_position, 10000);
+    EXPECT_EQ(task.get_state().current_zoom_x10, 60);
 }
 
 TEST_F(StorageTaskTest, ReceiveSave_Stall_CallsFram) {
@@ -51,25 +50,22 @@ TEST_F(StorageTaskTest, ReceiveSave_Stall_CallsFram) {
     task.run_once();
 
     EXPECT_GT(mock::get_log().spi_tx_data.size(), 0u);
-    EXPECT_EQ(task.get_params().last_save_reason, save_reason::STALL);
+    EXPECT_EQ(task.get_state().last_save_reason, save_reason::STALL);
 }
 
 TEST_F(StorageTaskTest, PeriodicSave_After500ms) {
-    // Set initial position
     send_save(1000, 60, save_reason::ARRIVED);
     task.run_once();
     size_t spi_count_after_first = mock::get_log().spi_tx_data.size();
 
     // Update position without queue message
-    FRAM_PARAMS_S params = task.get_params();
-    params.current_position = 2000;
-    task.set_params(params);
+    FRAM_STATE_S st = task.get_state();
+    st.current_position = 2000;
+    task.set_state(st);
 
-    // Advance tick by 500ms
     mock::get_log().tick = 501;
     task.run_once();
 
-    // Should have written again (periodic save)
     EXPECT_GT(mock::get_log().spi_tx_data.size(), spi_count_after_first);
 }
 
@@ -80,82 +76,35 @@ TEST_F(StorageTaskTest, SpiEmergency_SkipsSave) {
     size_t spi_count_before = mock::get_log().spi_tx_data.size();
     task.run_once();
 
-    // SPI should NOT have been called
     EXPECT_EQ(mock::get_log().spi_tx_data.size(), spi_count_before);
 }
 
-TEST_F(StorageTaskTest, RestoreParams_Valid) {
-    // Prepare valid FRAM data in SPI RX buffer
-    FRAM_PARAMS_S params = {};
-    params.magic_number = FramStorage::MAGIC;
-    params.version = 1;
-    params.current_position = 12345;
-    params.current_zoom_x10 = 100;
-    params.crc16 = FramStorage::calc_crc(params);
-
-    auto& log = mock::get_log();
-    const uint8_t* raw = reinterpret_cast<const uint8_t*>(&params);
-    // SPI read: FRAM returns data after 3-byte address command
-    // The mock will return from spi_rx_buffer sequentially
-    log.spi_rx_buffer.assign(raw, raw + sizeof(params));
-
-    FRAM_PARAMS_S restored;
-    bool ok = task.restore_params(restored);
-    // Note: The actual result depends on how FRAM SPI protocol works in mock
-    // The key is that restore_params exercises the code path
-    (void)ok;
-}
-
-TEST_F(StorageTaskTest, RestoreParams_Invalid) {
-    // Empty SPI buffer (all 0xFF) = invalid FRAM data
-    FRAM_PARAMS_S restored;
-    bool ok = task.restore_params(restored);
-    // Should fail since magic/CRC won't match
+TEST_F(StorageTaskTest, RestoreState_Invalid) {
+    FRAM_STATE_S restored;
+    bool ok = task.restore_state(restored);
     EXPECT_FALSE(ok);
 }
 
-TEST_F(StorageTaskTest, UpdatesPosition_InParams) {
+TEST_F(StorageTaskTest, UpdatesPosition_InState) {
     send_save(1000, 60, save_reason::ARRIVED);
     task.run_once();
-    EXPECT_EQ(task.get_params().current_position, 1000);
+    EXPECT_EQ(task.get_state().current_position, 1000);
 
     send_save(2000, 80, save_reason::ARRIVED);
     task.run_once();
-    EXPECT_EQ(task.get_params().current_position, 2000);
-    EXPECT_EQ(task.get_params().current_zoom_x10, 80);
+    EXPECT_EQ(task.get_state().current_position, 2000);
+    EXPECT_EQ(task.get_state().current_zoom_x10, 80);
 }
 
-TEST_F(StorageTaskTest, BacklashSave_UpdatesFramParams) {
-    SAVE_MESSAGE_S msg = {10000, 60, save_reason::ARRIVED, 42, 0xFF};
+TEST_F(StorageTaskTest, HomingDone_ResetsMovCount) {
+    // homing_done=1 resets move_count to 0, then position_valid=0xFF increments to 1
+    SAVE_MESSAGE_S msg = {10000, 60, save_reason::ARRIVED, 1, 0xFF};
     xQueueSend(saveQ, &msg, 0);
     task.run_once();
 
-    EXPECT_EQ(task.get_params().backlash_counts, 42);
-    EXPECT_EQ(task.get_params().backlash_valid, 0xFF);
-}
-
-TEST_F(StorageTaskTest, BacklashSave_IgnoredWhenNotCalibrated) {
-    // First set backlash
-    SAVE_MESSAGE_S msg1 = {10000, 60, save_reason::ARRIVED, 42, 0xFF};
-    xQueueSend(saveQ, &msg1, 0);
-    task.run_once();
-    EXPECT_EQ(task.get_params().backlash_counts, 42);
-
-    // Normal save should not overwrite backlash
-    SAVE_MESSAGE_S msg2 = {20000, 80, save_reason::ARRIVED, 0, 0};
-    xQueueSend(saveQ, &msg2, 0);
-    task.run_once();
-
-    EXPECT_EQ(task.get_params().current_position, 20000);
-    // Backlash should be unchanged
-    EXPECT_EQ(task.get_params().backlash_counts, 42);
-    EXPECT_EQ(task.get_params().backlash_valid, 0xFF);
-}
-
-TEST(SaveMessageTest, BacklashFields_DefaultZero) {
-    SAVE_MESSAGE_S stSave = {};
-    EXPECT_EQ(stSave.backlash_counts, 0);
-    EXPECT_EQ(stSave.backlash_valid, 0);
+    EXPECT_EQ(task.get_state().homing_done, 1);
+    EXPECT_EQ(task.get_state().position_valid, 0xFF);
+    EXPECT_EQ(task.get_state().move_count, 1);  // reset to 0, then +1 from position_valid
 }
 
 TEST_F(StorageTaskTest, MultipleSaves_Sequential) {
@@ -163,11 +112,10 @@ TEST_F(StorageTaskTest, MultipleSaves_Sequential) {
     send_save(2000, 80, save_reason::ARRIVED);
     send_save(3000, 100, save_reason::ARRIVED);
 
-    // Process all three
     task.run_once();
-    EXPECT_EQ(task.get_params().current_position, 1000);
+    EXPECT_EQ(task.get_state().current_position, 1000);
     task.run_once();
-    EXPECT_EQ(task.get_params().current_position, 2000);
+    EXPECT_EQ(task.get_state().current_position, 2000);
     task.run_once();
-    EXPECT_EQ(task.get_params().current_position, 3000);
+    EXPECT_EQ(task.get_state().current_position, 3000);
 }

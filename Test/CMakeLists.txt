@@ -67,6 +67,15 @@ target_include_directories(test_fram_storage PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/mocks ${CMAKE_SOURCE_DIR}/App/Inc)
 add_test(NAME test_fram_storage COMMAND test_fram_storage)
 
+# --- FlashConfig ---
+add_executable(test_flash_config test_flash_config.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/flash_config.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/crc16.cpp)
+target_link_libraries(test_flash_config PRIVATE zlens_mocks GTest::gtest_main)
+target_include_directories(test_flash_config PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/mocks ${CMAKE_SOURCE_DIR}/App/Inc)
+add_test(NAME test_flash_config COMMAND test_flash_config)
+
 # --- AdcFilter ---
 add_executable(test_adc_filter test_adc_filter.cpp
     ${CMAKE_SOURCE_DIR}/App/Src/adc_filter.cpp)

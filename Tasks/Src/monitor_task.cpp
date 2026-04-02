@@ -37,15 +37,14 @@ void MonitorTask::run_once() {
         feed_watchdog();
 
         if (!m_bBootDecided) {
-            // Decide boot path: normal / homing-only / full self-test
-            FRAM_PARAMS_S stParams{};
-            bool bValid = m_pFram->load_params(stParams);
-            if (bValid && FramStorage::check_magic(stParams) &&
-                FramStorage::verify_crc(stParams) && stParams.version == 2) {
-                if (stParams.position_valid == 0xFF && stParams.homing_done == 1
-                    && stParams.move_count < REHOME_MOVE_COUNT) {
+            // Decide boot path: normal / homing-only / first boot
+            FRAM_STATE_S stState{};
+            bool bValid = m_pFram->load_state(stState);
+            if (bValid) {
+                if (stState.position_valid == 0xFF && stState.homing_done == 1
+                    && stState.move_count < REHOME_MOVE_COUNT) {
                     m_bNormalBoot = true;
-                } else if (stParams.homing_done == 1) {
+                } else if (stState.homing_done == 1) {
                     m_bNeedHomingOnly = true;
                 }
             }
@@ -110,7 +109,7 @@ void MonitorTask::start_normal_boot() {
         return;
     }
 
-    // Position was already restored by StorageTask at startup (restore_params)
+    // Position was already restored by StorageTask at startup (restore_state)
     // Find nearest zoom and check if we need to move
     int32_t iCurrentPos = m_pEncoder->get_position();
     uint16_t iNearestZoom = m_pZoom->get_nearest_zoom(iCurrentPos);

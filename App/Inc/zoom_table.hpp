@@ -11,7 +11,7 @@ struct ZOOM_ENTRY_S {
 
 class ZoomTable {
 public:
-    static constexpr uint8_t MAX_ENTRIES = 32;
+    static constexpr uint16_t MAX_ENTRIES = 256;
     static constexpr int32_t TOTAL_RANGE = 65536;        // AS5311: 64 pole pairs × 1024 counts
     static constexpr int32_t HOME_OFFSET = 128;           // 归零后逻辑原点偏移 (~0.26mm)
     static constexpr int32_t FULL_ROTATION_X100 = 36000; // 360° × 100
@@ -30,7 +30,7 @@ public:
     // Factory mode
     void set_entry(uint16_t zoom_x10, uint16_t angle_x100);
     void erase_all();
-    uint8_t get_entry_count() const { return m_iCount; }
+    uint16_t get_entry_count() const { return m_iCount; }
 
     // Flash persistence
     bool save_to_flash();
@@ -38,7 +38,7 @@ public:
 
 private:
     ZOOM_ENTRY_S m_aEntries[MAX_ENTRIES];
-    uint8_t m_iCount = 0;
+    uint16_t m_iCount = 0;
 
     int32_t angle_to_position(int32_t iAngle_x100) const;
     int find_index(uint16_t zoom_x10) const;

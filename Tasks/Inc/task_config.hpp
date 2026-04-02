@@ -45,8 +45,17 @@ namespace cmd {
 
 // --- Factory mode command codes ---
 namespace fcmd {
-    constexpr uint8_t SET_ANGLE = 0xF1;
+    constexpr uint8_t ERASE_ALL      = 0xF0;
+    constexpr uint8_t SET_ENTRY      = 0xF1;
+    constexpr uint8_t SWITCH_TO_WORK = 0xFA;
 } // namespace fcmd
+
+// --- Factory mode magic key ---
+namespace factory {
+    constexpr uint16_t MAGIC_PARAM = 0xFAE5;  // work-mode 0xFA param
+    constexpr uint16_t MAGIC_HIGH  = 0xFAE5;  // factory-mode magic high word
+    constexpr uint16_t MAGIC_LOW   = 0x00FA;  // factory-mode magic low word
+} // namespace factory
 
 // --- Response command bytes (Protocol v2.5 Table 2) ---
 namespace rsp_cmd {
@@ -104,16 +113,9 @@ struct RSP_MESSAGE_S {
 struct SAVE_MESSAGE_S {
     int32_t position;
     uint16_t zoom_x10;
-    uint8_t reason; // see save_reason namespace
-    int16_t backlash_counts;    // 0 = don't update
-    uint8_t backlash_valid;     // 0 = don't update, 0xFF = calibrated
+    uint8_t reason;             // see save_reason namespace
     uint8_t homing_done;        // 0 = don't update, 1 = homing completed
     uint8_t position_valid;     // 0 = don't update, 0xFF = position trustworthy
-    // Speed fields (0x60 group)
-    uint16_t speed_duty;        // current speed duty_x10
-    uint16_t min_speed_duty;    // min speed duty_x10
-    uint16_t max_speed_duty;    // max speed duty_x10
-    uint8_t  speed_valid;       // 1 = update speed fields, 0 = skip
 };
 
 // Task priorities

@@ -54,54 +54,50 @@ void FramStorage::spi_read(uint16_t addr, uint8_t* data, uint16_t len) {
     cs_high();
 }
 
-uint16_t FramStorage::calc_crc(const FRAM_PARAMS_S& p) {
-    // CRC over all bytes except the last 2 (crc16 field itself)
-    return crc16_modbus(reinterpret_cast<const uint8_t*>(&p), sizeof(FRAM_PARAMS_S) - 2);
+uint16_t FramStorage::calc_crc(const FRAM_STATE_S& p) {
+    return crc16_modbus(reinterpret_cast<const uint8_t*>(&p), sizeof(FRAM_STATE_S) - 2);
 }
 
-bool FramStorage::verify_crc(const FRAM_PARAMS_S& p) {
+bool FramStorage::verify_crc(const FRAM_STATE_S& p) {
     return calc_crc(p) == p.crc16;
 }
 
-bool FramStorage::check_magic(const FRAM_PARAMS_S& p) {
-    return p.magic_number == MAGIC;
+bool FramStorage::check_magic(const FRAM_STATE_S& p) {
+    return p.magic == MAGIC;
 }
 
-bool FramStorage::save_params(const FRAM_PARAMS_S& params) {
-    FRAM_PARAMS_S p = params;
+bool FramStorage::save_state(const FRAM_STATE_S& stState) {
+    FRAM_STATE_S p = stState;
     p.crc16 = calc_crc(p);
     spi_write(PRIMARY_ADDR, reinterpret_cast<const uint8_t*>(&p), sizeof(p));
     spi_write(BACKUP_ADDR, reinterpret_cast<const uint8_t*>(&p), sizeof(p));
     return true;
 }
 
-bool FramStorage::load_params(FRAM_PARAMS_S& params) {
-    spi_read(PRIMARY_ADDR, reinterpret_cast<uint8_t*>(&params), sizeof(params));
-    if (check_magic(params) && verify_crc(params)) return true;
+bool FramStorage::load_state(FRAM_STATE_S& stState) {
+    spi_read(PRIMARY_ADDR, reinterpret_cast<uint8_t*>(&stState), sizeof(stState));
+    if (check_magic(stState) && verify_crc(stState)) return true;
 
     // Try backup
-    spi_read(BACKUP_ADDR, reinterpret_cast<uint8_t*>(&params), sizeof(params));
-    if (check_magic(params) && verify_crc(params)) return true;
+    spi_read(BACKUP_ADDR, reinterpret_cast<uint8_t*>(&stState), sizeof(stState));
+    if (check_magic(stState) && verify_crc(stState)) return true;
 
     return false;
 }
 
 void FramStorage::emergency_save(int32_t position) {
-    // Minimal save: position + valid flag + save reason
     write_disable_wp();
     write_enable();
     cs_low();
 
-    uint16_t pos_addr = PRIMARY_ADDR + offsetof(FRAM_PARAMS_S, current_position);
+    uint16_t pos_addr = PRIMARY_ADDR + offsetof(FRAM_STATE_S, current_position);
     uint8_t hdr[3] = {hw::FRAM_CMD_WRITE, static_cast<uint8_t>(pos_addr >> 8), static_cast<uint8_t>(pos_addr & 0xFF)};
     HAL_SPI_Transmit(m_pHspi, hdr, 3, 100);
-
-    // Write position (4 bytes)
     HAL_SPI_Transmit(m_pHspi, reinterpret_cast<uint8_t*>(&position), 4, 100);
     cs_high();
 
     // Write position_valid = 0xFF
-    uint16_t valid_addr = PRIMARY_ADDR + offsetof(FRAM_PARAMS_S, position_valid);
+    uint16_t valid_addr = PRIMARY_ADDR + offsetof(FRAM_STATE_S, position_valid);
     write_enable();
     cs_low();
     uint8_t hdr2[3] = {hw::FRAM_CMD_WRITE, static_cast<uint8_t>(valid_addr >> 8), static_cast<uint8_t>(valid_addr & 0xFF)};
@@ -114,8 +110,8 @@ void FramStorage::emergency_save(int32_t position) {
 }
 
 bool FramStorage::is_valid() {
-    FRAM_PARAMS_S p{};
-    return load_params(p);
+    FRAM_STATE_S p{};
+    return load_state(p);
 }
 
 bool FramStorage::test_rw(uint16_t addr, uint8_t test_byte) {
@@ -125,7 +121,7 @@ bool FramStorage::test_rw(uint16_t addr, uint8_t test_byte) {
     return readback == test_byte;
 }
 
-void FramStorage::load_params_from_buffer(const FRAM_PARAMS_S& src, FRAM_PARAMS_S& dst) {
+void FramStorage::load_state_from_buffer(const FRAM_STATE_S& src, FRAM_STATE_S& dst) {
     dst = src;
 }
 

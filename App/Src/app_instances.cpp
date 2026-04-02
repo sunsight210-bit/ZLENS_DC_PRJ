@@ -32,6 +32,7 @@ Encoder g_Encoder;
 StallDetect g_StallDetect;
 ZoomTable g_ZoomTable;
 FramStorage g_FramStorage;
+FlashConfig g_FlashConfig;
 CommProtocol g_CommProtocol;
 SystemManager g_SystemManager;
 PowerMonitor g_PowerMonitor;
@@ -57,7 +58,15 @@ extern "C" void app_init(void) {
     g_Encoder.init();
     g_StallDetect.init();
     g_ZoomTable.init();
-    g_ZoomTable.load_defaults();
+    if (!g_ZoomTable.load_from_flash()) {
+        swo_printf("[BOOT] ZoomTable: Flash load failed, using defaults\n");
+        g_ZoomTable.load_defaults();
+    } else {
+        swo_printf("[BOOT] ZoomTable: loaded %u entries from Flash (min=%u max=%u)\n",
+                   g_ZoomTable.get_entry_count(),
+                   g_ZoomTable.get_min_zoom(),
+                   g_ZoomTable.get_max_zoom());
+    }
     g_FramStorage.init(&hspi2);
     g_CommProtocol.init();
     g_SystemManager.init();

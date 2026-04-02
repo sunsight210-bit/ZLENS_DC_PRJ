@@ -66,11 +66,12 @@ void CommTask::dispatch_work_command(uint8_t cmd_byte, uint16_t param) {
         return;
     }
 
-    // Switch factory mode
+    // Enter factory mode (requires magic param)
     if (cmd_byte == cmd::SWITCH_FACTORY) {
-        m_pComm->set_factory_mode(!m_pComm->is_factory_mode());
-        send_uart_frame(cmd::SWITCH_FACTORY,
-                        m_pComm->is_factory_mode() ? 0x0001 : 0x0000);
+        if (param == factory::MAGIC_PARAM) {
+            m_pComm->set_factory_mode(true);
+            send_uart_frame(cmd::SWITCH_FACTORY, 0x0001);
+        }
         return;
     }
 
@@ -94,11 +95,22 @@ void CommTask::dispatch_work_command(uint8_t cmd_byte, uint16_t param) {
 
 void CommTask::dispatch_factory_command(uint8_t cmd_byte, uint16_t paramH, uint16_t paramL) {
     switch (cmd_byte) {
-    case fcmd::SET_ANGLE: {
-        CMD_MESSAGE_S stCmd = {cmd_byte, paramL};
-        xQueueSend(m_cmdQueue, &stCmd, 0);
+    case fcmd::ERASE_ALL:
+        if (paramH == factory::MAGIC_HIGH && paramL == factory::MAGIC_LOW) {
+            m_pZoom->erase_all();
+            m_pZoom->save_to_flash();
+        }
         break;
-    }
+    case fcmd::SET_ENTRY:
+        m_pZoom->set_entry(paramH, paramL);
+        break;
+    case fcmd::SWITCH_TO_WORK:
+        if (paramH == factory::MAGIC_HIGH && paramL == factory::MAGIC_LOW) {
+            m_pComm->set_factory_mode(false);
+            send_uart_frame(cmd::SWITCH_FACTORY, 0x0000);
+            m_pZoom->save_to_flash();
+        }
+        break;
     default:
         break;
     }

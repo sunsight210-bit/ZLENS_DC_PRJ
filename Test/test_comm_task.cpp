@@ -99,12 +99,12 @@ TEST_F(CommTaskTest, Handshake_MotionCommandEchoes) {
 
 TEST_F(CommTaskTest, Handshake_FactoryModeEchoes) {
     comm.set_factory_mode(true);
-    send_factory_frame(fcmd::SET_ANGLE, 0x001E, 0x510E);
+    send_factory_frame(fcmd::SET_ENTRY, 0x001E, 0x510E);
 
     ASSERT_GE(uart_tx_count(), 1u);
     auto& echo = mock::get_log().uart_tx_data[0];
     uint8_t expected[8];
-    comm.build_factory_frame(fcmd::SET_ANGLE, 0x001E, 0x510E, expected);
+    comm.build_factory_frame(fcmd::SET_ENTRY, 0x001E, 0x510E, expected);
     EXPECT_EQ(echo.size(), 8u);
     for (size_t i = 0; i < 8; i++) {
         EXPECT_EQ(echo[i], expected[i]);
@@ -326,10 +326,10 @@ TEST_F(CommTaskTest, ZoomInc_BusyReject) {
 // SwitchFactory at 0xFA
 // ============================================================
 
-TEST_F(CommTaskTest, SwitchFactory_ToggleMode) {
+TEST_F(CommTaskTest, SwitchFactory_EnterWithMagic) {
     EXPECT_FALSE(comm.is_factory_mode());
 
-    send_work_frame(cmd::SWITCH_FACTORY, 0);
+    send_work_frame(cmd::SWITCH_FACTORY, factory::MAGIC_PARAM);
     EXPECT_TRUE(comm.is_factory_mode());
 
     // echo + response
@@ -339,19 +339,26 @@ TEST_F(CommTaskTest, SwitchFactory_ToggleMode) {
     EXPECT_EQ(result.param, 0x0001); // factory mode ON
 }
 
+TEST_F(CommTaskTest, SwitchFactory_RejectWithoutMagic) {
+    EXPECT_FALSE(comm.is_factory_mode());
+
+    send_work_frame(cmd::SWITCH_FACTORY, 0x0000);
+    EXPECT_FALSE(comm.is_factory_mode()); // should NOT enter factory mode
+}
+
 // ============================================================
 // Factory command forwarding
 // ============================================================
 
-TEST_F(CommTaskTest, FactorySetAngle_Forwards) {
+TEST_F(CommTaskTest, FactorySetEntry_UpdatesZoomTable) {
     comm.set_factory_mode(true);
 
-    send_factory_frame(fcmd::SET_ANGLE, 0x001E, 0x510E);
+    send_factory_frame(fcmd::SET_ENTRY, 0x001E, 0x510E);
 
+    // SET_ENTRY should update ZoomTable directly, not forward to MotorTask
     CMD_MESSAGE_S msg;
-    EXPECT_TRUE(receive_cmd(msg));
-    EXPECT_EQ(msg.cmd, fcmd::SET_ANGLE);
-    EXPECT_EQ(msg.param, 0x510E);
+    EXPECT_FALSE(receive_cmd(msg));
+    EXPECT_TRUE(zoom.is_valid_zoom(0x001E));
 }
 
 // ============================================================
@@ -494,4 +501,99 @@ TEST_F(CommTaskTest, StallCountAccessor_DefaultAndSet) {
     EXPECT_EQ(task.get_stall_count(), 0);
     task.set_stall_count(3);
     EXPECT_EQ(task.get_stall_count(), 3);
+}
+
+// ============================================================
+// Factory mode: full calibration flow
+// ============================================================
+
+TEST_F(CommTaskTest, FactoryEraseAll_ClearsZoomTable) {
+    // ZoomTable has defaults loaded
+    EXPECT_GT(zoom.get_entry_count(), 0);
+
+    comm.set_factory_mode(true);
+    send_factory_frame(fcmd::ERASE_ALL, factory::MAGIC_HIGH, factory::MAGIC_LOW);
+
+    EXPECT_EQ(zoom.get_entry_count(), 0);
+}
+
+TEST_F(CommTaskTest, FactoryEraseAll_RejectBadMagic) {
+    comm.set_factory_mode(true);
+    uint16_t iCountBefore = zoom.get_entry_count();
+
+    send_factory_frame(fcmd::ERASE_ALL, 0x1234, 0x5678);
+
+    EXPECT_EQ(zoom.get_entry_count(), iCountBefore); // unchanged
+}
+
+TEST_F(CommTaskTest, FactoryExitToWork_SavesAndSwitches) {
+    comm.set_factory_mode(true);
+
+    // Erase + set 2 entries
+    send_factory_frame(fcmd::ERASE_ALL, factory::MAGIC_HIGH, factory::MAGIC_LOW);
+    send_factory_frame(fcmd::SET_ENTRY, 10, 7200);   // 1.0x = 72.00°
+    send_factory_frame(fcmd::SET_ENTRY, 20, 14800);  // 2.0x = 148.00°
+    EXPECT_EQ(zoom.get_entry_count(), 2);
+
+    // Exit factory mode
+    send_factory_frame(fcmd::SWITCH_TO_WORK, factory::MAGIC_HIGH, factory::MAGIC_LOW);
+
+    EXPECT_FALSE(comm.is_factory_mode());
+    // save_to_flash was called (flash_memory should have data)
+    EXPECT_FALSE(mock::get_log().flash_memory.empty());
+}
+
+TEST_F(CommTaskTest, FactoryExitToWork_RejectBadMagic) {
+    comm.set_factory_mode(true);
+
+    send_factory_frame(fcmd::SWITCH_TO_WORK, 0x0000, 0x0000);
+
+    EXPECT_TRUE(comm.is_factory_mode()); // still in factory mode
+}
+
+TEST_F(CommTaskTest, FactoryFullCalibrationFlow) {
+    // Step 1: Enter factory mode from work mode
+    send_work_frame(cmd::SWITCH_FACTORY, factory::MAGIC_PARAM);
+    EXPECT_TRUE(comm.is_factory_mode());
+
+    // Step 2: Erase old table
+    send_factory_frame(fcmd::ERASE_ALL, factory::MAGIC_HIGH, factory::MAGIC_LOW);
+    EXPECT_EQ(zoom.get_entry_count(), 0);
+
+    // Step 3: Set 5 zoom entries
+    send_factory_frame(fcmd::SET_ENTRY, 6,     0);      // 0.6x
+    send_factory_frame(fcmd::SET_ENTRY, 10,  7200);     // 1.0x
+    send_factory_frame(fcmd::SET_ENTRY, 20, 14800);     // 2.0x
+    send_factory_frame(fcmd::SET_ENTRY, 40, 25750);     // 4.0x
+    send_factory_frame(fcmd::SET_ENTRY, 70, 34700);     // 7.0x
+    EXPECT_EQ(zoom.get_entry_count(), 5);
+
+    // Step 4: Verify entries are valid and positions correct
+    EXPECT_TRUE(zoom.is_valid_zoom(6));
+    EXPECT_TRUE(zoom.is_valid_zoom(20));
+    EXPECT_TRUE(zoom.is_valid_zoom(70));
+    EXPECT_FALSE(zoom.is_valid_zoom(30));  // not in new table
+
+    // Step 5: Exit factory mode (saves to flash)
+    send_factory_frame(fcmd::SWITCH_TO_WORK, factory::MAGIC_HIGH, factory::MAGIC_LOW);
+    EXPECT_FALSE(comm.is_factory_mode());
+
+    // Step 6: Verify saved — position for 2.0x should be 128 + 14800*65536/36000 = 27075
+    int32_t iPos = zoom.get_position(20);
+    EXPECT_EQ(iPos, 128 + static_cast<int32_t>(
+        static_cast<int64_t>(14800) * 65536 / 36000));
+}
+
+TEST_F(CommTaskTest, FactorySetEntry_OverwriteExisting) {
+    comm.set_factory_mode(true);
+    send_factory_frame(fcmd::ERASE_ALL, factory::MAGIC_HIGH, factory::MAGIC_LOW);
+
+    send_factory_frame(fcmd::SET_ENTRY, 20, 14800);
+    send_factory_frame(fcmd::SET_ENTRY, 20, 15000);  // overwrite same zoom
+
+    EXPECT_EQ(zoom.get_entry_count(), 1);  // still 1 entry, not 2
+    // Position should reflect the updated angle
+    int32_t iPos = zoom.get_position(20);
+    EXPECT_EQ(iPos, 128 + static_cast<int32_t>(
+        static_cast<int64_t>(15000) * 65536 / 36000));
 }

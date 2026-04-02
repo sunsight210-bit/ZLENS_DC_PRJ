@@ -7,6 +7,7 @@
 #include "stall_detect.hpp"
 #include "zoom_table.hpp"
 #include "fram_storage.hpp"
+#include "flash_config.hpp"
 #include "comm_protocol.hpp"
 #include "system_manager.hpp"
 #include "power_monitor.hpp"
@@ -20,6 +21,7 @@ extern Encoder g_Encoder;
 extern StallDetect g_StallDetect;
 extern ZoomTable g_ZoomTable;
 extern FramStorage g_FramStorage;
+extern FlashConfig g_FlashConfig;
 extern CommProtocol g_CommProtocol;
 extern SystemManager g_SystemManager;
 extern PowerMonitor g_PowerMonitor;

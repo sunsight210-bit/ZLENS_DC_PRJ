@@ -11,23 +11,23 @@ public:
 
     void init(FramStorage* pFram, QueueHandle_t saveQ);
     void run_once();
-    bool restore_params(FRAM_PARAMS_S& stParams);
+    bool restore_state(FRAM_STATE_S& stState);
 
-    const FRAM_PARAMS_S& get_params() const { return m_stParams; }
-    void set_params(const FRAM_PARAMS_S& stParams) { m_stParams = stParams; }
+    const FRAM_STATE_S& get_state() const { return m_stState; }
+    void set_state(const FRAM_STATE_S& stState) { m_stState = stState; }
 
 private:
     FramStorage* m_pFram = nullptr;
     QueueHandle_t m_saveQueue = nullptr;
 
-    FRAM_PARAMS_S m_stParams = {};
+    FRAM_STATE_S m_stState = {};
     uint32_t m_iLastSaveTick = 0;
     int32_t m_iLastSavedPosition = 0;
-    bool m_bParamsLoaded = false;
+    bool m_bStateLoaded = false;
 
     void handle_save(const SAVE_MESSAGE_S& stMsg);
     void do_periodic_save();
-    void write_params();
+    void write_state();
 };
 
 } // namespace zlens

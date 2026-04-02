@@ -220,7 +220,7 @@ void MotorTask::dispatch_command(const CMD_MESSAGE_S& stCmd) {
         m_iSpeedDuty = iDuty;
         apply_speed_to_motor();
         send_response(rsp_cmd::SPEED, m_iSpeedDuty);
-        send_save(save_reason::ARRIVED, 0, 0, true);
+        save_speed_to_flash();
         break;
     }
     case cmd::SPEED_INC:
@@ -242,7 +242,7 @@ void MotorTask::dispatch_command(const CMD_MESSAGE_S& stCmd) {
             apply_speed_to_motor();
         }
         send_response(rsp_cmd::SPEED, m_iMinSpeedDuty);
-        send_save(save_reason::ARRIVED, 0, 0, true);
+        save_speed_to_flash();
         break;
     }
     case cmd::SET_MAX_SPEED: {
@@ -254,7 +254,7 @@ void MotorTask::dispatch_command(const CMD_MESSAGE_S& stCmd) {
             apply_speed_to_motor();
         }
         send_response(rsp_cmd::SPEED, m_iMaxSpeedDuty);
-        send_save(save_reason::ARRIVED, 0, 0, true);
+        save_speed_to_flash();
         break;
     }
     case cmd::SELF_TEST:
@@ -730,6 +730,20 @@ void MotorTask::apply_speed_to_motor() {
     // This is a no-op in PID mode — the PID controller decides PWM based on position error.
 }
 
+void MotorTask::save_speed_to_flash() {
+#ifndef BUILD_TESTING
+    FLASH_CONFIG_S stConfig;
+    FlashConfig fc;
+    if (!fc.load(stConfig)) {
+        FlashConfig::load_defaults(stConfig);
+    }
+    stConfig.speed_duty     = m_iSpeedDuty;
+    stConfig.min_speed_duty = m_iMinSpeedDuty;
+    stConfig.max_speed_duty = m_iMaxSpeedDuty;
+    fc.save(stConfig);
+#endif
+}
+
 void MotorTask::restore_speed(uint16_t iSpeedDuty, uint16_t iMinDuty, uint16_t iMaxDuty) {
     m_iMinSpeedDuty = (iMinDuty > 0) ? iMinDuty : rsp::DEFAULT_MIN_SPEED_DUTY;
     m_iMaxSpeedDuty = (iMaxDuty > 0) ? iMaxDuty : rsp::DEFAULT_MAX_SPEED_DUTY;
@@ -740,12 +754,10 @@ void MotorTask::restore_speed(uint16_t iSpeedDuty, uint16_t iMinDuty, uint16_t i
 }
 
 void MotorTask::send_save(uint8_t reason, uint8_t homing_done,
-                          uint8_t position_valid, bool bSaveSpeed) {
+                          uint8_t position_valid) {
     int32_t iPos = m_pEncoder->get_position();
     uint16_t iZoom = m_pZoom->get_nearest_zoom(iPos);
-    SAVE_MESSAGE_S stSave = {iPos, iZoom, reason, 0, 0, homing_done, position_valid,
-                             m_iSpeedDuty, m_iMinSpeedDuty, m_iMaxSpeedDuty,
-                             static_cast<uint8_t>(bSaveSpeed ? 1 : 0)};
+    SAVE_MESSAGE_S stSave = {iPos, iZoom, reason, homing_done, position_valid};
     xQueueSend(m_saveQueue, &stSave, 0);
 }
 
@@ -761,17 +773,16 @@ extern "C" void motor_task_entry(void* params) {
               &g_FramStorage, &g_SystemManager, g_cmdQueue, g_rspQueue,
               g_saveQueue, const_cast<uint16_t*>(&g_aAdcDmaBuf[0]));
 
-    // Restore speed from FRAM (version >= 3)
+    // Restore speed from Flash config
     {
-        FRAM_PARAMS_S stParams;
-        if (g_FramStorage.load_params(stParams) &&
-            FramStorage::verify_crc(stParams) && FramStorage::check_magic(stParams) &&
-            stParams.version >= 3) {
-            task.restore_speed(stParams.speed_duty, stParams.min_speed_duty,
-                               stParams.max_speed_duty);
+        FLASH_CONFIG_S stConfig;
+        FlashConfig fc;
+        if (fc.load(stConfig)) {
+            task.restore_speed(stConfig.speed_duty, stConfig.min_speed_duty,
+                               stConfig.max_speed_duty);
             swo_printf("[MOTOR] Speed restored: duty=%u min=%u max=%u\n",
-                       stParams.speed_duty, stParams.min_speed_duty,
-                       stParams.max_speed_duty);
+                       stConfig.speed_duty, stConfig.min_speed_duty,
+                       stConfig.max_speed_duty);
         }
     }
 
