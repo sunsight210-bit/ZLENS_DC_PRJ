@@ -71,7 +71,7 @@
 # Phase N Review
 
 ## 代码审查
-- [ ] 命名规范符合 coding-style.md
+- [ ] 命名规范符合 docs/dev/coding-style.md
 - [ ] TDD 覆盖率 >80%
 - [ ] 产品代码与测试代码边界清晰
 
