@@ -6,3 +6,8 @@ build*/
 *.bin
 *.hex
 *.map
+Test/logs/
+Debug/
+*.pdf
+*.PDF
+*.docx

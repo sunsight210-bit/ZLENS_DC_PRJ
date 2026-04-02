@@ -20,6 +20,7 @@ function(zlens_add_test NAME SOURCE APP_SOURCES)
     target_include_directories(${NAME} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/mocks
         ${CMAKE_SOURCE_DIR}/App/Inc
+        ${CMAKE_SOURCE_DIR}/Tasks/Inc
     )
     target_compile_definitions(${NAME} PRIVATE BUILD_TESTING)
     add_test(NAME ${NAME} COMMAND ${NAME})
@@ -66,6 +67,23 @@ target_include_directories(test_fram_storage PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/mocks ${CMAKE_SOURCE_DIR}/App/Inc)
 add_test(NAME test_fram_storage COMMAND test_fram_storage)
 
+# --- FlashConfig ---
+add_executable(test_flash_config test_flash_config.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/flash_config.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/crc16.cpp)
+target_link_libraries(test_flash_config PRIVATE zlens_mocks GTest::gtest_main)
+target_include_directories(test_flash_config PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/mocks ${CMAKE_SOURCE_DIR}/App/Inc)
+add_test(NAME test_flash_config COMMAND test_flash_config)
+
+# --- AdcFilter ---
+add_executable(test_adc_filter test_adc_filter.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/adc_filter.cpp)
+target_link_libraries(test_adc_filter PRIVATE zlens_mocks GTest::gtest_main)
+target_include_directories(test_adc_filter PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/mocks ${CMAKE_SOURCE_DIR}/App/Inc)
+add_test(NAME test_adc_filter COMMAND test_adc_filter)
+
 # --- StallDetect ---
 add_executable(test_stall_detect test_stall_detect.cpp
     ${CMAKE_SOURCE_DIR}/App/Src/stall_detect.cpp)
@@ -98,3 +116,56 @@ target_link_libraries(test_system_manager PRIVATE zlens_mocks GTest::gtest_main)
 target_include_directories(test_system_manager PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/mocks ${CMAKE_SOURCE_DIR}/App/Inc)
 add_test(NAME test_system_manager COMMAND test_system_manager)
+
+# ==========================================
+# Task-level tests (Phase 3-6)
+# ==========================================
+
+# --- MotorTask ---
+zlens_add_test(test_motor_task test_motor_task.cpp
+    ${CMAKE_SOURCE_DIR}/Tasks/Src/motor_task.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/motor_ctrl.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/encoder.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/stall_detect.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/zoom_table.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/crc16.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/adc_filter.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/fram_storage.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/system_manager.cpp
+)
+
+# --- CommTask ---
+zlens_add_test(test_comm_task test_comm_task.cpp
+    ${CMAKE_SOURCE_DIR}/Tasks/Src/comm_task.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/comm_protocol.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/system_manager.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/zoom_table.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/crc16.cpp
+)
+
+# --- StorageTask ---
+zlens_add_test(test_storage_task test_storage_task.cpp
+    ${CMAKE_SOURCE_DIR}/Tasks/Src/storage_task.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/fram_storage.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/crc16.cpp
+)
+
+# --- MonitorTask ---
+zlens_add_test(test_monitor_task test_monitor_task.cpp
+    ${CMAKE_SOURCE_DIR}/Tasks/Src/monitor_task.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/system_manager.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/power_monitor.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/fram_storage.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/encoder.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/motor_ctrl.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/zoom_table.cpp
+    ${CMAKE_SOURCE_DIR}/App/Src/crc16.cpp
+)
+
+# PidCtrl 单元测试
+add_executable(test_pid_ctrl test_pid_ctrl.cpp)
+target_include_directories(test_pid_ctrl PRIVATE
+    ${PROJECT_SOURCE_DIR}/App/Inc
+    ${PROJECT_SOURCE_DIR}/Test/mocks)
+target_link_libraries(test_pid_ctrl GTest::gtest_main)
+add_test(NAME test_pid_ctrl COMMAND test_pid_ctrl)

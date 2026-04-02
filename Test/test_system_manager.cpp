@@ -45,6 +45,14 @@ TEST_F(SystemManagerTest, Transition_Busy_To_Ready) {
     EXPECT_TRUE(sm.transition_to(SYSTEM_STATE_E::READY));
 }
 
+TEST_F(SystemManagerTest, Transition_Ready_To_SelfTest) {
+    sm.transition_to(SYSTEM_STATE_E::SELF_TEST);
+    sm.transition_to(SYSTEM_STATE_E::HOMING);
+    sm.transition_to(SYSTEM_STATE_E::READY);
+    EXPECT_TRUE(sm.transition_to(SYSTEM_STATE_E::SELF_TEST));
+    EXPECT_EQ(sm.get_state(), SYSTEM_STATE_E::SELF_TEST);
+}
+
 TEST_F(SystemManagerTest, AnyState_To_Error) {
     EXPECT_TRUE(sm.transition_to(SYSTEM_STATE_E::ERROR_STATE));
 }

@@ -12,6 +12,91 @@
 
 namespace zlens {
 
+// --- Work mode command codes (Protocol v2.5) ---
+namespace cmd {
+    // 0x0X: Control commands
+    constexpr uint8_t HOMING         = 0x01;
+    constexpr uint8_t FORCE_STOP     = 0x02;
+    constexpr uint8_t GET_STALL_CNT  = 0x03;
+    // 0x1X: Zoom commands
+    constexpr uint8_t SET_ZOOM       = 0x10;
+    constexpr uint8_t ZOOM_INC       = 0x11;
+    constexpr uint8_t ZOOM_DEC       = 0x12;
+    // 0x2X: Query commands
+    constexpr uint8_t QUERY_ZOOM     = 0x20;
+    constexpr uint8_t QUERY_STATUS   = 0x21;
+    constexpr uint8_t QUERY_SPEED    = 0x22;
+    constexpr uint8_t QUERY_TYPE     = 0x23;
+    constexpr uint8_t QUERY_RANGE    = 0x24;
+    constexpr uint8_t QUERY_VERSION  = 0x25;
+    // 0x3X: Cycle zoom
+    constexpr uint8_t CYCLE_START    = 0x30;
+    constexpr uint8_t CYCLE_STOP     = 0x31;
+    // 0x6X: Speed commands (CMS16 brushed DC)
+    constexpr uint8_t SET_SPEED      = 0x60;
+    constexpr uint8_t SPEED_INC      = 0x61;
+    constexpr uint8_t SPEED_DEC      = 0x62;
+    constexpr uint8_t SET_MIN_SPEED  = 0x63;
+    constexpr uint8_t SET_MAX_SPEED  = 0x64;
+    constexpr uint8_t SELF_TEST      = 0x65;
+    // 0xFX: Mode switch
+    constexpr uint8_t SWITCH_FACTORY = 0xFA;
+} // namespace cmd
+
+// --- Factory mode command codes ---
+namespace fcmd {
+    constexpr uint8_t ERASE_ALL      = 0xF0;
+    constexpr uint8_t SET_ENTRY      = 0xF1;
+    constexpr uint8_t SWITCH_TO_WORK = 0xFA;
+} // namespace fcmd
+
+// --- Factory mode magic key ---
+namespace factory {
+    constexpr uint16_t MAGIC_PARAM = 0xFAE5;  // work-mode 0xFA param
+    constexpr uint16_t MAGIC_HIGH  = 0xFAE5;  // factory-mode magic high word
+    constexpr uint16_t MAGIC_LOW   = 0x00FA;  // factory-mode magic low word
+} // namespace factory
+
+// --- Response command bytes (Protocol v2.5 Table 2) ---
+namespace rsp_cmd {
+    constexpr uint8_t HOMING_DONE = 0x01;
+    constexpr uint8_t ARRIVED     = 0x02;
+    constexpr uint8_t REQ_INVALID = 0x03;
+    constexpr uint8_t ZOOM        = 0x10;
+    constexpr uint8_t STATUS      = 0x11;
+    constexpr uint8_t SPEED       = 0x12;
+    constexpr uint8_t TYPE        = 0x13;
+    constexpr uint8_t MIN_ZOOM    = 0x14;
+    constexpr uint8_t MAX_ZOOM    = 0x15;
+    constexpr uint8_t VERSION     = 0x16;
+    constexpr uint8_t ERR_PARAM   = 0xE0;
+    constexpr uint8_t STALL_STOP  = 0xE1;
+    constexpr uint8_t OVERCURRENT = 0xE2;
+    constexpr uint8_t STALL_COUNT = 0xE3;
+} // namespace rsp_cmd
+
+// --- Response param constants ---
+namespace rsp {
+    constexpr uint16_t LENS_TYPE          = 0x0004;
+    constexpr uint16_t OK                 = 0x0000;
+    constexpr uint16_t HOMING_DONE_PARAM  = 0x000F;
+    constexpr uint16_t ARRIVED_PARAM      = 0x000A;
+    constexpr uint16_t REQ_INVALID_PARAM  = 0x000E;
+    constexpr uint16_t FW_VERSION         = 0x0100;  // v1.00 (high=major, low=minor)
+    constexpr uint16_t DEFAULT_SPEED_DUTY     = 300;  // CCR=1920 (30.0%)
+    constexpr uint16_t DEFAULT_MIN_SPEED_DUTY =  40;  // CCR=256  (4.0%)
+    constexpr uint16_t DEFAULT_MAX_SPEED_DUTY = 300;  // CCR=1920 (30.0%)
+    constexpr uint16_t POWER_DOWN         = 0x0005;
+} // namespace rsp
+
+// --- Save reason codes ---
+namespace save_reason {
+    constexpr uint8_t ARRIVED    = 0;
+    constexpr uint8_t PERIODIC   = 1;
+    constexpr uint8_t POWER_DOWN = 2;
+    constexpr uint8_t STALL      = 3;
+} // namespace save_reason
+
 // Command message from CommTask to MotorTask
 struct CMD_MESSAGE_S {
     uint8_t cmd;
@@ -28,7 +113,9 @@ struct RSP_MESSAGE_S {
 struct SAVE_MESSAGE_S {
     int32_t position;
     uint16_t zoom_x10;
-    uint8_t reason; // 0=arrived, 1=periodic, 2=power_down, 3=stall
+    uint8_t reason;             // see save_reason namespace
+    uint8_t homing_done;        // 0 = don't update, 1 = homing completed
+    uint8_t position_valid;     // 0 = don't update, 0xFF = position trustworthy
 };
 
 // Task priorities
@@ -41,12 +128,19 @@ constexpr uint32_t MONITOR_TASK_PRIORITY = 1;
 constexpr uint32_t MOTOR_TASK_STACK   = 512;
 constexpr uint32_t COMM_TASK_STACK    = 256;
 constexpr uint32_t STORAGE_TASK_STACK = 256;
-constexpr uint32_t MONITOR_TASK_STACK = 256;
+constexpr uint32_t MONITOR_TASK_STACK = 384;
 
 // Global queue handles (defined in main.cpp, extern here)
 extern QueueHandle_t g_cmdQueue;
 extern QueueHandle_t g_rspQueue;
 extern QueueHandle_t g_saveQueue;
 extern volatile bool g_bSpiEmergency;
+
+// --- Homing mechanical parameters ---
+namespace homing {
+    constexpr int32_t RETRACT_DISTANCE = 256;      // ~0.5mm retract after coarse limit
+    constexpr int32_t SETTLE_DISTANCE  = 128;      // = HOME_OFFSET
+    constexpr int32_t FAR_DISTANCE     = 100000;   // far-distance homing move
+} // namespace homing
 
 } // namespace zlens

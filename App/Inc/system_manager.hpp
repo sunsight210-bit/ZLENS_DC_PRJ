@@ -12,7 +12,8 @@ public:
     bool transition_to(SYSTEM_STATE_E new_state);
     SYSTEM_STATE_E get_state() const { return m_eState; }
     bool is_ready() const { return m_eState == SYSTEM_STATE_E::READY; }
-    bool is_busy() const { return m_eState == SYSTEM_STATE_E::BUSY; }
+    bool is_busy() const { return m_eState == SYSTEM_STATE_E::BUSY ||
+                                    m_eState == SYSTEM_STATE_E::HOMING; }
     uint16_t get_status_code() const;
 
 private:
