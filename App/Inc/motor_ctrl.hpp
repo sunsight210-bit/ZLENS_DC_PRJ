@@ -27,7 +27,7 @@ public:
     static constexpr int32_t  MIN_SPEED_DEADBAND = 32;    // error≤32: no base, PID controls
     static constexpr uint16_t STUCK_RAMP_PERIOD = 50;   // check every 50ms
     static constexpr uint16_t STUCK_RAMP_PCT = 110;     // +10% per step
-    static constexpr int32_t  DEADZONE = 1;
+    static constexpr int32_t  DEADZONE = 3;
     // Speed cap tiers (stepped speed limiting)
     static constexpr int32_t  SPEED_CAP_TIER1 = 4000;
     static constexpr int32_t  SPEED_CAP_TIER2 = 1000;
