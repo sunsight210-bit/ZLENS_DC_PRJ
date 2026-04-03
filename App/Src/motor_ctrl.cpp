@@ -143,7 +143,7 @@ void MotorCtrl::update() {
     }
     if (iSpeed < iMinSpeed) {
         iSpeed = iMinSpeed;
-#ifndef BUILD_TESTING
+#ifdef PID_TUNE_LOG
         if (m_iRunTicks % 500 == 0) {
             swo_printf("[RAMP]rt=%u,min=%u,err=%ld\n",
                        m_iRunTicks, iMinSpeed, static_cast<long>(iError));
@@ -180,6 +180,9 @@ void MotorCtrl::update() {
 }
 
 void MotorCtrl::set_vref_mv(uint16_t mv) {
+    // Set A4950 VREF via DAC CH2 (PA4/PA5)
+    // VREF=2500mV → DAC=2500×4095/3300=3103 → A4950 current limit
+    // Fixed during operation, same for coarse and fine positioning
     if (!m_pHdac) return;
     uint32_t dac_val = static_cast<uint32_t>(mv) * 4095 / 3300;
     HAL_DAC_SetValue(m_pHdac, DAC_CHANNEL_2, DAC_ALIGN_12B_R, dac_val);

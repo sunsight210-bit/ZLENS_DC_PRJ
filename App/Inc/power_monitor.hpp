@@ -6,9 +6,12 @@ namespace zlens {
 
 class PowerMonitor {
 public:
-    // R_top=30kΩ, R_bottom=4.7kΩ, ratio=347/47
-    // ADC: 2017 raw ≈ 12V, 1394 raw ≈ 8.3V
-    static constexpr uint16_t POWER_DOWN_THRESHOLD = 1394;
+    // Voltage divider on PB0 (ADC1_CH8):
+    // 12V supply → PB0 = 1.65V (measured by multimeter)
+    // ADC reference = 3.3V, 12-bit (0~4095)
+    // ADC = 1.65 / 3.3 × 4095 = 2048 → 2048 raw ≈ 12V
+    // Power-down threshold: 9V → ADC = 9/12 × 2048 = 1536
+    static constexpr uint16_t POWER_DOWN_THRESHOLD = 1536;
 
     void init();
     bool is_power_down(uint16_t adc_value) const;

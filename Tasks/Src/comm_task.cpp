@@ -251,11 +251,13 @@ extern "C" void comm_task_entry(void* params) {
             s_bRxReady = false;
             iWatchdogCount = 0;
             iDmaStuckCount = 0;
+#ifdef PID_TUNE_LOG
             swo_printf("[COMM] RX %u bytes:", s_iRxLen);
             for (uint16_t i = 0; i < s_iRxLen && i < 8; i++) {
                 swo_printf(" %02X", s_aRxBuf[i]);
             }
             swo_printf("\n");
+#endif
             task.on_frame_received(s_aRxBuf, s_iRxLen);
             start_uart_dma_rx(&huart2);
         }

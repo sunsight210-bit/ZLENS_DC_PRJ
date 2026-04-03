@@ -54,7 +54,7 @@ extern "C" void app_init(void) {
     g_Motor.init(&htim3, &hdac, &g_Encoder);
     g_Motor.set_soft_limit_min(ZoomTable::HOME_OFFSET);  // 128
     HAL_DAC_Start(&hdac, DAC_CHANNEL_2);   // enable DAC CH2 output
-    g_Motor.set_vref_mv(2500);  // A4950 VREF=2.5V
+    g_Motor.set_vref_mv(2500);  // A4950 VREF=2.5V, 粗调精调全程固定
     g_Encoder.init();
     g_StallDetect.init();
     g_ZoomTable.init();

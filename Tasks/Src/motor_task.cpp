@@ -86,6 +86,19 @@ void MotorTask::run_once() {
         return;
     }
 
+    // Current monitoring: print every 50ms when motor is active
+#ifdef PID_TUNE_LOG
+    if (m_eTaskState != TASK_STATE_E::IDLE) {
+        static uint16_t s_iCurPrintCount = 0;
+        if (++s_iCurPrintCount >= 50) {
+            s_iCurPrintCount = 0;
+            swo_printf("[CUR] raw=%u filt=%u pos=%ld state=%d\n",
+                       iAdcRaw, iAdcFiltered,
+                       static_cast<long>(iPos), (int)m_eTaskState);
+        }
+    }
+#endif
+
     // Non-blocking command queue check
     CMD_MESSAGE_S stCmd;
     if (xQueueReceive(m_cmdQueue, &stCmd, 0) == pdTRUE) {
@@ -284,7 +297,13 @@ void MotorTask::start_homing() {
 void MotorTask::process_moving() {
     if (m_pMotor->get_state() == MOTOR_STATE_E::IDLE) {
         int32_t iPos = m_pEncoder->get_position();
+        int32_t iTarget = m_pMotor->get_target();
         uint16_t iZoom = m_pZoom->get_nearest_zoom(iPos);
+#ifndef BUILD_TESTING
+        swo_printf("[ARRIVE] target=%ld pos=%ld err=%ld dir=%d zoom=%u\n",
+                   iTarget, iPos, iPos - iTarget,
+                   (int)m_pMotor->get_direction(), iZoom);
+#endif
         m_pStall->reset();
         m_iRetryCount = 0;
         send_response(rsp_cmd::ZOOM, iZoom);
@@ -796,10 +815,12 @@ extern "C" void motor_task_entry(void* params) {
         // Heartbeat every 5s
         if (++iHeartbeat >= MotorTask::HEARTBEAT_INTERVAL) {
             iHeartbeat = 0;
-            swo_printf("[MOTOR] HB state=%d motor=%d pos=%ld\n",
+            swo_printf("[MOTOR] HB state=%d motor=%d pos=%ld cur=%u vol=%u\n",
                        (int)task.get_state(),
                        (int)g_Motor.get_state(),
-                       static_cast<long>(g_Encoder.get_position()));
+                       static_cast<long>(g_Encoder.get_position()),
+                       g_aAdcDmaBuf[0],
+                       g_aAdcDmaBuf[1]);
         }
 
         vTaskDelayUntil(&xLastWake, pdMS_TO_TICKS(1));
